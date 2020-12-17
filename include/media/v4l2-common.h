@@ -488,7 +488,7 @@ int v4l2_fill_pixfmt_mp(struct v4l2_pix_format_mplane *pixfmt, u32 pixelformat,
 			u32 width, u32 height);
 
 /**
- * v4l2_get_link_rate - Get link rate from transmitter
+ * v4l2_get_link_freq - Get link rate from transmitter
  *
  * @handler: The transmitter's control handler
  * @mul: The multiplier between pixel rate and link frequency. Bits per pixel on
@@ -505,7 +505,7 @@ int v4l2_fill_pixfmt_mp(struct v4l2_pix_format_mplane *pixfmt, u32 pixelformat,
  *	-ENOENT: Link frequency or pixel rate control not found
  *	-EINVAL: Invalid link frequency value
  */
-s64 v4l2_get_link_rate(struct v4l2_ctrl_handler *handler, unsigned int mul,
+s64 v4l2_get_link_freq(struct v4l2_ctrl_handler *handler, unsigned int mul,
 		       unsigned int div);
 
 #endif /* V4L2_COMMON_H_ */
