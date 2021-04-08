@@ -15,6 +15,7 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
+#include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
@@ -216,6 +217,8 @@
 #define MIPI_CSIS_DBG_INTR_SRC_EARLY_FS		BIT(8)
 #define MIPI_CSIS_DBG_INTR_SRC_CAM_VSYNC_FALL	BIT(4)
 #define MIPI_CSIS_DBG_INTR_SRC_CAM_VSYNC_RISE	BIT(0)
+
+#define MIPI_CSIS_FRAME_COUNTER_CH(n)		(0x0100 + (n) * 4)
 
 /* Non-image packet data buffers */
 #define MIPI_CSIS_PKTDATA_ODD			0x2000
@@ -828,6 +831,7 @@ static int mipi_csis_dump_regs(struct csi_state *state)
 		{ MIPI_CSIS_SDW_CONFIG_CH(0), "SDW_CONFIG_CH0" },
 		{ MIPI_CSIS_SDW_RESOL_CH(0), "SDW_RESOL_CH0" },
 		{ MIPI_CSIS_DBG_CTRL, "DBG_CTRL" },
+		{ MIPI_CSIS_FRAME_COUNTER_CH(0), "FRAME_COUNTER_CH0" },
 	};
 
 	unsigned int i;
@@ -1434,11 +1438,14 @@ static int mipi_csis_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-	state->gasket = syscon_regmap_lookup_by_phandle(dev->of_node, "csi-gpr");
-	if (IS_ERR(state->gasket)) {
-		ret = PTR_ERR(state->gasket);
-		dev_err(dev, "failed to get CSI gasket: %d\n", ret);
-		return ret;
+	if (state->info->has_gasket) {
+		state->gasket = syscon_regmap_lookup_by_phandle(dev->of_node,
+								"csi-gpr");
+		if (IS_ERR(state->gasket)) {
+			ret = PTR_ERR(state->gasket);
+			dev_err(dev, "failed to get CSI gasket: %d\n", ret);
+			return ret;
+		}
 	}
 
 	/* Reset PHY and enable the clocks. */
