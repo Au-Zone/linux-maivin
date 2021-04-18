@@ -70,10 +70,6 @@
 	};
 };
 
-&cameradev {
-	status = "okay";
-};
-
 &backlight {
 	power-supply = <&reg_3p3v>;
 };
@@ -191,10 +187,6 @@
 
 &isi_0 {
 	status = "okay";
-
-	cap_device {
-		status = "okay";
-	};
 };
 
 &mipi_csi_0 {
