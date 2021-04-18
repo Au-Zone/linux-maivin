@@ -61,13 +61,6 @@ config IMX8_ISI_CORE
 	depends on VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
 	default y
 
-config IMX8_ISI_CAPTURE
-	tristate "IMX8 Image Sensor Interface Capture Device Driver"
-	depends on VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
-	depends on IMX8_ISI_HW
-	select VIDEOBUF2_DMA_CONTIG
-	default y
-
 config IMX8_MIPI_CSI2
 	tristate "IMX8 MIPI CSI2 Controller"
 	depends on VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
