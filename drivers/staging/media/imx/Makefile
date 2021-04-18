@@ -6,7 +6,7 @@ imx6-media-objs := imx-media-dev.o imx-media-internal-sd.o \
 	imx-ic-common.o imx-ic-prp.o imx-ic-prpencvf.o imx-media-vdic.o \
 	imx-media-csc-scaler.o
 
-imx8-capture-objs := imx8-isi-cap.o imx8-isi-core.o imx8-isi-hw.o
+imx8-capture-objs := imx8-isi-core.o imx8-isi-hw.o imx8-isi-pipe.o
 
 imx6-media-csi-objs := imx-media-csi.o imx-media-fim.o
 
