@@ -57,8 +57,8 @@ config IMX8_MEDIA_DEVICE
 	  all modules in image subsystem of imx8qxp/qm platform.
 
 config IMX8_ISI_CORE
-	tristate "IMX8 Image Sensor Interface Core Driver"
-	depends on IMX8_ISI_CAPTURE && IMX8_ISI_M2M
+	bool "IMX8 Image Sensor Interface Core Driver"
+	depends on VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
 	default y
 
 config IMX8_ISI_CAPTURE
