@@ -10091,12 +10091,13 @@ F:	drivers/media/platform/imx-pxp.[ch]
 
 MEDIA DRIVERS FOR FREESCALE IMX7
 M:	Rui Miguel Silva <rmfrfs@gmail.com>
+M:	Laurent Pinchart <laurent.pinchart@ideasonboard.com>
 L:	linux-media@vger.kernel.org
-T:	git git://linuxtv.org/media_tree.git
 S:	Maintained
-F:	Documentation/devicetree/bindings/media/imx7-csi.txt
-F:	Documentation/devicetree/bindings/media/imx7-mipi-csi2.txt
-F:	Documentation/media/v4l-drivers/imx7.rst
+T:	git git://linuxtv.org/media_tree.git
+F:	Documentation/admin-guide/media/imx7.rst
+F:	Documentation/devicetree/bindings/media/nxp,imx7-csi.yaml
+F:	Documentation/devicetree/bindings/media/nxp,imx7-mipi-csi2.yaml
 F:	drivers/staging/media/imx/imx7-media-csi.c
 F:	drivers/staging/media/imx/imx7-mipi-csis.c
 
@@ -15192,6 +15193,14 @@ T:	git git://linuxtv.org/media_tree.git
 S:	Maintained
 F:	drivers/media/i2c/imx274.c
 F:	Documentation/devicetree/bindings/media/i2c/imx274.txt
+
+SONY IMX296 SENSOR DRIVER
+M:	Manivannan Sadhasivam <manivannan.sadhasivam@linaro.org>
+L:	linux-media@vger.kernel.org
+T:	git git://linuxtv.org/media_tree.git
+S:	Maintained
+F:	drivers/media/i2c/imx296.c
+F:	Documentation/devicetree/bindings/media/i2c/imx296.yaml
 
 SONY IMX319 SENSOR DRIVER
 M:	Bingbu Cao <bingbu.cao@intel.com>

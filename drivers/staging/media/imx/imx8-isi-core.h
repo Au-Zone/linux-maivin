@@ -6,42 +6,40 @@
 #ifndef __MXC_ISI_CORE_H__
 #define __MXC_ISI_CORE_H__
 
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/types.h>
-#include <linux/errno.h>
 #include <linux/bug.h>
-#include <linux/interrupt.h>
+#include <linux/clk.h>
 #include <linux/device.h>
-#include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
+#include <linux/errno.h>
+#include <linux/interrupt.h>
+#include <linux/io.h>
+#include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/mfd/syscon.h>
-#include <linux/io.h>
+#include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
-#include <linux/slab.h>
-#include <linux/clk.h>
-#include <media/media-device.h>
-#include <media/media-entity.h>
-#include <media/v4l2-subdev.h>
-#include <media/v4l2-ioctl.h>
-#include <media/v4l2-mem2mem.h>
-#include <media/videobuf2-core.h>
-#include <media/v4l2-device.h>
-#include <media/v4l2-subdev.h>
-#include <media/v4l2-ctrls.h>
-#include <media/videobuf2-core.h>
-#include <media/videobuf2-dma-contig.h>
+#include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
+#include <linux/slab.h>
 #include <linux/sys_soc.h>
+#include <linux/types.h>
+
+#include <media/media-device.h>
+#include <media/media-entity.h>
+#include <media/v4l2-async.h>
+#include <media/v4l2-ctrls.h>
+#include <media/v4l2-device.h>
+#include <media/v4l2-ioctl.h>
+#include <media/v4l2-subdev.h>
+#include <media/videobuf2-core.h>
+#include <media/videobuf2-dma-contig.h>
 
 #include "imx8-common.h"
 
 #define MXC_ISI_DRIVER_NAME	"mxc-isi"
 #define MXC_ISI_CAPTURE		"mxc-isi-cap"
-#define MXC_ISI_M2M		"mxc-isi-m2m"
 #define MXC_MAX_PLANES		3
 
 struct mxc_isi_dev;
@@ -102,27 +100,8 @@ enum mxc_isi_in_fmt {
 	MXC_ISI_IN_FMT_BGR8P	= 0x0,
 };
 
-enum mxc_isi_m2m_in_fmt {
-	MXC_ISI_M2M_IN_FMT_BGR8P	= 0x0,
-	MXC_ISI_M2M_IN_FMT_RGB8P,
-	MXC_ISI_M2M_IN_FMT_XRGB8,
-	MXC_ISI_M2M_IN_FMT_RGBX8,
-	MXC_ISI_M2M_IN_FMT_XBGR8,
-	MXC_ISI_M2M_IN_FMT_RGB565,
-	MXC_ISI_M2M_IN_FMT_A2BGR10,
-	MXC_ISI_M2M_IN_FMT_A2RGB10,
-	MXC_ISI_M2M_IN_FMT_YUV444_1P8P,
-	MXC_ISI_M2M_IN_FMT_YUV444_1P10,
-	MXC_ISI_M2M_IN_FMT_YUV444_1P10P,
-	MXC_ISI_M2M_IN_FMT_YUV444_1P12,
-	MXC_ISI_M2M_IN_FMT_YUV444_1P8,
-	MXC_ISI_M2M_IN_FMT_YUV422_1P8P,
-	MXC_ISI_M2M_IN_FMT_YUV422_1P10,
-	MXC_ISI_M2M_IN_FMT_YUV422_1P10P,
-};
-
 struct mxc_isi_fmt {
-	char	*name;
+	const char	*name;
 	u32	mbus_code;
 	u32	fourcc;
 	u32	color;
@@ -181,7 +160,7 @@ struct mxc_isi_frame {
 	u32	height;
 	unsigned int	sizeimage[MXC_MAX_PLANES];
 	unsigned int	bytesperline[MXC_MAX_PLANES];
-	struct mxc_isi_fmt	*fmt;
+	const struct mxc_isi_fmt	*fmt;
 };
 
 struct mxc_isi_roi_alpha {
@@ -195,38 +174,6 @@ struct mxc_isi_buffer {
 	struct frame_addr	paddr;
 	enum mxc_isi_buf_id	id;
 	bool discard;
-};
-
-struct mxc_isi_m2m_dev {
-	struct platform_device	*pdev;
-
-	struct video_device vdev;
-	struct v4l2_device  v4l2_dev;
-	struct v4l2_m2m_dev *m2m_dev;
-	struct v4l2_fh      fh;
-	struct v4l2_pix_format_mplane pix;
-
-	struct list_head	out_active;
-	struct mxc_isi_ctrls	ctrls;
-
-	struct mxc_isi_frame src_f;
-	struct mxc_isi_frame dst_f;
-
-	struct mutex lock;
-	spinlock_t   slock;
-
-	unsigned int aborting;
-	unsigned int frame_count;
-
-	u32 req_cap_buf_num;
-	u32 req_out_buf_num;
-
-	u8 id;
-};
-
-struct mxc_isi_ctx {
-	struct mxc_isi_m2m_dev *isi_m2m;
-	struct v4l2_fh	    fh;
 };
 
 struct mxc_isi_chan_src {
@@ -322,11 +269,7 @@ struct mxc_isi_cap_dev {
 };
 
 struct mxc_isi_dev {
-	/* Pointer to isi capture child device driver data */
-	struct mxc_isi_cap_dev *isi_cap;
-
-	/* Pointer to isi m2m child device driver data */
-	struct mxc_isi_m2m_dev *isi_m2m;
+	struct mxc_isi_cap_dev isi_cap;
 
 	struct platform_device *pdev;
 
@@ -353,8 +296,9 @@ struct mxc_isi_dev {
 
 	u8 chain_buf;
 	u8 alpha;
-	bool m2m_enabled;
 	bool buf_active_reverse;
+
+	void (*frame_write_done)(struct mxc_isi_dev *mxc_isi);
 
 	/* manage share ISI channel resource */
 	atomic_t usage_count;
@@ -370,6 +314,11 @@ struct mxc_isi_dev {
 	u32 interface[MAX_PORTS];
 	int id;
 
+	struct media_device media_dev;
+	struct v4l2_device v4l2_dev;
+	struct v4l2_async_notifier notifier;
+	struct list_head asds;
+
 	unsigned int hflip:1;
 	unsigned int vflip:1;
 	unsigned int cscen:1;
@@ -379,6 +328,9 @@ struct mxc_isi_dev {
 	unsigned int deinterlace:1;
 	unsigned int is_streaming:1;
 };
+
+int isi_cap_probe(struct mxc_isi_dev *mxc_isi);
+void isi_cap_remove(struct mxc_isi_dev *mxc_isi);
 
 static inline void set_frame_bounds(struct mxc_isi_frame *f,
 				    u32 width, u32 height)

@@ -62,6 +62,12 @@
 				<192000>;
 		status = "disabled";
 	};
+
+	x16_clk: clock-x16 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <54000000>;
+	};
 };
 
 &backlight {
@@ -123,6 +129,33 @@
 
 &i2c3 {
 	status = "okay";
+
+	vc_ctrl: controller@10 {
+		compatible = "vision-components,mipi-module";
+		reg = <0x10>;
+		pinctrl-0 = <&pinctrl_csenable>;
+		csenable-gpios = <&gpio3 7 GPIO_ACTIVE_HIGH>;
+	};
+
+	camera@1a {
+		compatible = "sony,imx296ll";
+		reg = <0x1a>;
+
+		clocks = <&x16_clk>;
+		clock-names = "inck";
+
+		vddd-supply = <&vc_ctrl>;
+
+		orientation = <1>;	/* Back */
+		rotation = <0>;
+
+		port {
+			imx296_out: endpoint {
+				data-lanes = <1>;
+				remote-endpoint = <&mipi_csi0_ep>;
+			};
+		};
+	};
 };
 
 &i2c4 {
@@ -151,6 +184,23 @@
 
 &pcie_phy{
 	status = "okay";
+};
+
+&isi_0 {
+	status = "okay";
+};
+
+&mipi_csi_0 {
+	status = "okay";
+
+	ports {
+		port@0 {
+			mipi_csi0_ep: endpoint {
+				remote-endpoint = <&imx296_out>;
+				data-lanes = <1>;
+			};
+		};
+	};
 };
 
 /* Verdin PWM_1 */

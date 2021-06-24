@@ -195,15 +195,6 @@ struct v4l2_subdev_core_ops {
 	int (*load_fw)(struct v4l2_subdev *sd);
 	int (*reset)(struct v4l2_subdev *sd, u32 val);
 	int (*s_gpio)(struct v4l2_subdev *sd, u32 val);
-#ifdef CONFIG_VIDEO_ECAM
-	int (*queryctrl)(struct v4l2_subdev *sd, struct v4l2_queryctrl *qc);
-	int (*g_ctrl)(struct v4l2_subdev *sd, struct v4l2_control *ctrl);
-	int (*s_ctrl)(struct v4l2_subdev *sd, struct v4l2_control *ctrl);
-	int (*querymenu)(struct v4l2_subdev *sd, struct v4l2_querymenu *qm);
-	int (*g_ext_ctrls)(struct v4l2_subdev *sd, struct v4l2_ext_controls *ctrls);
-	int (*s_ext_ctrls)(struct v4l2_subdev *sd, struct v4l2_ext_controls *ctrls);
-	int (*try_ext_ctrls)(struct v4l2_subdev *sd, struct v4l2_ext_controls *ctrls);
-#endif
 	long (*ioctl)(struct v4l2_subdev *sd, unsigned int cmd, void *arg);
 #ifdef CONFIG_COMPAT
 	long (*compat_ioctl32)(struct v4l2_subdev *sd, unsigned int cmd,
@@ -1043,6 +1034,23 @@ static inline void *v4l2_get_subdev_hostdata(const struct v4l2_subdev *sd)
 }
 
 #ifdef CONFIG_MEDIA_CONTROLLER
+
+/**
+ * v4l2_subdev_get_fwnode_pad_1_to_1 - Get pad number from a subdev fwnode
+ *                                     endpoint, assuming 1:1 port:pad
+ *
+ * @entity - Pointer to the subdev entity
+ * @endpoint - Pointer to a parsed fwnode endpoint
+ *
+ * This function can be used as the .get_fwnode_pad operation for
+ * subdevices that map port numbers and pad indexes 1:1. If the endpoint
+ * is owned by the subdevice, the function returns the endpoint port
+ * number.
+ *
+ * Returns the endpoint port number on success or a negative error code.
+ */
+int v4l2_subdev_get_fwnode_pad_1_to_1(struct media_entity *entity,
+				      struct fwnode_endpoint *endpoint);
 
 /**
  * v4l2_subdev_link_validate_default - validates a media link
