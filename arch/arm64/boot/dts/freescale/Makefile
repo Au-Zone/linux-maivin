@@ -80,6 +80,7 @@ dtb-$(CONFIG_ARCH_MXC) += imx8mp-evk.dtb imx8mp-evk-root.dtb imx8mp-evk-inmate.d
 			  imx8mp-evk-basler-ov2775.dtb imx8mp-evk-dual-basler.dtb \
 			  imx8mp-maivin.dtb \
 			  imx8mp-maivin-csi1-imx296.dtb \
+			  imx8mp-maivin-csi1-imx327.dtb \
 			  imx8mp-maivin-csi1-ov5640.dtb \
 			  imx8mp-verdin-dahlia-imx296.dtb \
 			  imx8mp-verdin-dahlia-imx327.dtb \
