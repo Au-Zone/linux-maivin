@@ -79,6 +79,7 @@ dtb-$(CONFIG_ARCH_MXC) += imx8mp-evk.dtb imx8mp-evk-root.dtb imx8mp-evk-inmate.d
 			  imx8mp-evk-basler-ov5640.dtb imx8mp-evk-dual-ov2775.dtb \
 			  imx8mp-evk-basler-ov2775.dtb imx8mp-evk-dual-basler.dtb \
 			  imx8mp-verdin-dahlia-imx296.dtb \
+			  imx8mp-verdin-dahlia-imx327.dtb \
 			  imx8mp-verdin-nonwifi-dahlia.dtb \
 			  imx8mp-verdin-nonwifi-dev.dtb \
 			  imx8mp-verdin-wifi-dahlia.dtb \
