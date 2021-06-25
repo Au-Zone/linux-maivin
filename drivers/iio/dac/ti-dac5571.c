@@ -402,6 +402,7 @@ MODULE_DEVICE_TABLE(of, dac5571_of_id);
 #endif
 
 static const struct i2c_device_id dac5571_id[] = {
+	{"dac081c081", single_8bit},
 	{"dac5571", single_8bit},
 	{"dac6571", single_10bit},
 	{"dac7571", single_12bit},
