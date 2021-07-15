@@ -15,6 +15,7 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
+#include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
@@ -22,6 +23,7 @@
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
+#include <linux/regmap.h>
 #include <linux/reset.h>
 #include <linux/spinlock.h>
 
@@ -32,7 +34,6 @@
 #include <media/v4l2-subdev.h>
 
 #define CSIS_DRIVER_NAME			"imx7-mipi-csis"
-#define CSIS_SUBDEV_NAME			CSIS_DRIVER_NAME
 
 #define CSIS_PAD_SINK				0
 #define CSIS_PAD_SOURCE				1
@@ -42,6 +43,11 @@
 #define MIPI_CSIS_DEF_PIX_HEIGHT		480
 
 /* Register map definition */
+
+/* CSIS version */
+#define MIPI_CSIS_VERSION			0x00
+#define MIPI_CSIS_VERSION_IMX7D			0x03030505
+#define MIPI_CSIS_VERSION_IMX8MP		0x03060301
 
 /* CSIS common control */
 #define MIPI_CSIS_CMN_CTRL			0x04
@@ -211,12 +217,24 @@
 #define MIPI_CSIS_DBG_INTR_SRC_CAM_VSYNC_FALL	BIT(4)
 #define MIPI_CSIS_DBG_INTR_SRC_CAM_VSYNC_RISE	BIT(0)
 
+#define MIPI_CSIS_FRAME_COUNTER_CH(n)		(0x0100 + (n) * 4)
+
 /* Non-image packet data buffers */
 #define MIPI_CSIS_PKTDATA_ODD			0x2000
 #define MIPI_CSIS_PKTDATA_EVEN			0x3000
 #define MIPI_CSIS_PKTDATA_SIZE			SZ_4K
 
 #define DEFAULT_SCLK_CSIS_FREQ			166000000UL
+
+/* Gasket registers (i.MX8MN and i.MX8MP only) */
+#define GASKET_CTRL				0x0000
+#define GASKET_CTRL_DATA_TYPE(dt)		((dt) << 8)
+#define GASKET_CTRL_DATA_TYPE_MASK		(0x3f << 8)
+#define GASKET_CTRL_DUAL_COMP_ENABLE		BIT(1)
+#define GASKET_CTRL_ENABLE			BIT(0)
+
+#define GASKET_HSIZE				0x0004
+#define GASKET_VSIZE				0x0008
 
 /* MIPI CSI-2 Data Types */
 #define MIPI_CSI2_DATA_TYPE_YUV420_8		0x18
@@ -302,6 +320,7 @@ enum mipi_csis_version {
 struct mipi_csis_info {
 	enum mipi_csis_version version;
 	unsigned int num_clocks;
+	bool has_gasket;
 };
 
 struct csi_state {
@@ -310,8 +329,8 @@ struct csi_state {
 	struct clk_bulk_data *clks;
 	struct reset_control *mrst;
 	struct regulator *mipi_phy_regulator;
+	struct regmap *gasket;
 	const struct mipi_csis_info *info;
-	u8 index;
 
 	struct v4l2_subdev sd;
 	struct media_pad pads[CSIS_PADS_NUM];
@@ -331,7 +350,11 @@ struct csi_state {
 	spinlock_t slock;	/* Protect events */
 	struct mipi_csis_event events[MIPI_CSIS_NUM_EVENTS];
 	struct dentry *debugfs_root;
-	bool debug;
+	struct {
+		bool debug;
+		u32 hs_settle;
+		u32 clk_settle;
+	} debug;
 };
 
 /* -----------------------------------------------------------------------------
@@ -442,7 +465,39 @@ static const struct csis_pix_format *find_csis_format(u32 code)
 }
 
 /* -----------------------------------------------------------------------------
- * Hardware configuration
+ * Media block control (i.MX8MN and i.MX8MP only)
+ */
+
+static void media_blk_ctrl_gasket_config(struct csi_state *state)
+{
+	struct v4l2_mbus_framefmt *mf = &state->format_mbus;
+	struct regmap *gasket = state->gasket;
+	u32 val;
+
+	if (!state->info->has_gasket)
+		return;
+
+	regmap_read(gasket, GASKET_CTRL, &val);
+	if (state->csis_fmt->data_type == MIPI_CSI2_DATA_TYPE_YUV422_8)
+		val |= GASKET_CTRL_DUAL_COMP_ENABLE;
+	val |= GASKET_CTRL_DATA_TYPE(state->csis_fmt->data_type);
+	regmap_write(gasket, GASKET_CTRL, val);
+
+	regmap_write(gasket, GASKET_HSIZE, mf->width);
+	regmap_write(gasket, GASKET_VSIZE, mf->height);
+}
+
+static void media_blk_ctrl_gasket_enable(struct csi_state *state, bool enable)
+{
+	if (!state->info->has_gasket)
+		return;
+
+	regmap_update_bits(state->gasket, GASKET_CTRL, GASKET_CTRL_ENABLE,
+			   enable ? GASKET_CTRL_ENABLE : 0);
+}
+
+/* -----------------------------------------------------------------------------
+ * CSIS hardware configuration
  */
 
 static inline u32 mipi_csis_read(struct csi_state *state, u32 reg)
@@ -541,6 +596,18 @@ static int mipi_csis_calculate_params(struct csi_state *state)
 	dev_dbg(state->dev, "lane rate %u, Tclk_settle %u, Ths_settle %u\n",
 		lane_rate, state->clk_settle, state->hs_settle);
 
+	if (state->debug.hs_settle < 0xff) {
+		dev_dbg(state->dev, "overriding Ths_settle with %u\n",
+			state->debug.hs_settle);
+		state->hs_settle = state->debug.hs_settle;
+	}
+
+	if (state->debug.clk_settle < 4) {
+		dev_dbg(state->dev, "overriding Tclk_settle with %u\n",
+			state->debug.clk_settle);
+		state->clk_settle = state->debug.clk_settle;
+	}
+
 	return 0;
 }
 
@@ -632,8 +699,12 @@ static int mipi_csis_clk_get(struct csi_state *state)
 static void mipi_csis_start_stream(struct csi_state *state)
 {
 	mipi_csis_sw_reset(state);
+
+	media_blk_ctrl_gasket_config(state);
 	mipi_csis_set_params(state);
+
 	mipi_csis_system_enable(state, true);
+	media_blk_ctrl_gasket_enable(state, true);
 	mipi_csis_enable_interrupts(state, true);
 }
 
@@ -641,6 +712,7 @@ static void mipi_csis_stop_stream(struct csi_state *state)
 {
 	mipi_csis_enable_interrupts(state, false);
 	mipi_csis_system_enable(state, false);
+	media_blk_ctrl_gasket_enable(state, false);
 }
 
 static irqreturn_t mipi_csis_irq_handler(int irq, void *dev_id)
@@ -657,7 +729,7 @@ static irqreturn_t mipi_csis_irq_handler(int irq, void *dev_id)
 	spin_lock_irqsave(&state->slock, flags);
 
 	/* Update the event/error counters */
-	if ((status & MIPI_CSIS_INT_SRC_ERRORS) || state->debug) {
+	if ((status & MIPI_CSIS_INT_SRC_ERRORS) || state->debug.debug) {
 		for (i = 0; i < MIPI_CSIS_NUM_EVENTS; i++) {
 			struct mipi_csis_event *event = &state->events[i];
 
@@ -747,7 +819,7 @@ static void mipi_csis_log_counters(struct csi_state *state, bool non_errors)
 	spin_lock_irqsave(&state->slock, flags);
 
 	for (i = 0; i < num_events; ++i) {
-		if (state->events[i].counter > 0 || state->debug)
+		if (state->events[i].counter > 0 || state->debug.debug)
 			dev_info(state->dev, "%s events: %d\n",
 				 state->events[i].name,
 				 state->events[i].counter);
@@ -773,6 +845,7 @@ static int mipi_csis_dump_regs(struct csi_state *state)
 		{ MIPI_CSIS_SDW_CONFIG_CH(0), "SDW_CONFIG_CH0" },
 		{ MIPI_CSIS_SDW_RESOL_CH(0), "SDW_RESOL_CH0" },
 		{ MIPI_CSIS_DBG_CTRL, "DBG_CTRL" },
+		{ MIPI_CSIS_FRAME_COUNTER_CH(0), "FRAME_COUNTER_CH0" },
 	};
 
 	unsigned int i;
@@ -798,12 +871,19 @@ DEFINE_SHOW_ATTRIBUTE(mipi_csis_dump_regs);
 
 static void mipi_csis_debugfs_init(struct csi_state *state)
 {
+	state->debug.hs_settle = UINT_MAX;
+	state->debug.clk_settle = UINT_MAX;
+
 	state->debugfs_root = debugfs_create_dir(dev_name(state->dev), NULL);
 
 	debugfs_create_bool("debug_enable", 0600, state->debugfs_root,
-			    &state->debug);
+			    &state->debug.debug);
 	debugfs_create_file("dump_regs", 0600, state->debugfs_root, state,
 			    &mipi_csis_dump_regs_fops);
+	debugfs_create_u32("tclk_settle", 0600, state->debugfs_root,
+			   &state->debug.clk_settle);
+	debugfs_create_u32("ths_settle", 0600, state->debugfs_root,
+			   &state->debug.hs_settle);
 }
 
 static void mipi_csis_debugfs_exit(struct csi_state *state)
@@ -864,7 +944,7 @@ static int mipi_csis_s_stream(struct v4l2_subdev *sd, int enable)
 			ret = 0;
 		mipi_csis_stop_stream(state);
 		state->state &= ~ST_STREAMING;
-		if (state->debug)
+		if (state->debug.debug)
 			mipi_csis_log_counters(state, true);
 	}
 
@@ -1059,7 +1139,7 @@ static int mipi_csis_log_status(struct v4l2_subdev *sd)
 
 	mutex_lock(&state->lock);
 	mipi_csis_log_counters(state, true);
-	if (state->debug && (state->state & ST_POWERED))
+	if (state->debug.debug && (state->state & ST_POWERED))
 		mipi_csis_dump_regs(state);
 	mutex_unlock(&state->lock);
 
@@ -1301,8 +1381,8 @@ static int mipi_csis_subdev_init(struct csi_state *state)
 
 	v4l2_subdev_init(sd, &mipi_csis_subdev_ops);
 	sd->owner = THIS_MODULE;
-	snprintf(sd->name, sizeof(sd->name), "%s.%d",
-		 CSIS_SUBDEV_NAME, state->index);
+	snprintf(sd->name, sizeof(sd->name), "csis-%s",
+		 dev_name(state->dev));
 
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 	sd->ctrl_handler = NULL;
@@ -1376,6 +1456,16 @@ static int mipi_csis_probe(struct platform_device *pdev)
 	ret = mipi_csis_clk_get(state);
 	if (ret < 0)
 		return ret;
+
+	if (state->info->has_gasket) {
+		state->gasket = syscon_regmap_lookup_by_phandle(dev->of_node,
+								"csi-gpr");
+		if (IS_ERR(state->gasket)) {
+			ret = PTR_ERR(state->gasket);
+			dev_err(dev, "failed to get CSI gasket: %d\n", ret);
+			return ret;
+		}
+	}
 
 	/* Reset PHY and enable the clocks. */
 	mipi_csis_phy_reset(state);
@@ -1463,12 +1553,21 @@ static const struct of_device_id mipi_csis_of_match[] = {
 		.data = &(const struct mipi_csis_info){
 			.version = MIPI_CSIS_V3_3,
 			.num_clocks = 3,
+			.has_gasket = false,
 		},
 	}, {
 		.compatible = "fsl,imx8mm-mipi-csi2",
 		.data = &(const struct mipi_csis_info){
 			.version = MIPI_CSIS_V3_6_3,
 			.num_clocks = 4,
+			.has_gasket = false,
+		},
+	}, {
+		.compatible = "fsl,imx8mp-mipi-csi2",
+		.data = &(const struct mipi_csis_info){
+			.version = MIPI_CSIS_V3_6_3,
+			.num_clocks = 4,
+			.has_gasket = true,
 		},
 	},
 	{ /* sentinel */ },
