@@ -1,6 +1,6 @@
 /*
  * ar1335.c - AR1335 sensor driver
- * Copyright (c) 2020-2021, e-con Systems.  All rights reserved.
+ * Copyright (c) 2018-2019, e-con Systems.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -24,24 +24,18 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
 
-#include "ar1335.h"
-#include "mcu_firmware_1335.h"
+#include "ar1335_af.h"
+#include "mcu_firmware_1335_af.h"
 
 /*
 #define AR1335_DEBUG 1
 */
-
 /*!
  * Maintains the information on the current state of the sensor.
  */
-static struct ar1335 ar1335_data;
+static struct ar1335_af ar1335_data;
 
 static int pwdn_gpio, reset_gpio;
-
-int gpios_available_1335(void)
-{
-	return (pwdn_gpio >= 0) && (reset_gpio >= 0);
-}
 
 /**********************************************************************
  *
@@ -49,6 +43,8 @@ int gpios_available_1335(void)
  *
  **********************************************************************
  */
+
+static int retries_for_i2c_commands = 5;
 
 static int ar1335_write(struct i2c_client *client, u8 * val, u32 count)
 {
@@ -180,7 +176,7 @@ static unsigned char errorcheck(char *data, unsigned int len)
  * A success value (0) is returned when the MCU version could be successfully read.
  * else a negative value indicating error is returned.
  */
-static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_version_1335)
+static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_version_1335_af)
 {
 	uint32_t payload_len = 0;
 	uint8_t errcode = ERRCODE_SUCCESS, orig_crc = 0, calc_crc = 0;
@@ -188,15 +184,15 @@ static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_versi
 	/* Query firmware version from MCU */
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
+	mutex_lock(&mcu_i2c_mutex_1335_af);
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_VERSION;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_VERSION;
+	mc_data_1335_af[2] = payload_len >> 8;
+	mc_data_1335_af[3] = payload_len & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-	err = ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+	err = ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 	if (err != 0)
 	{
 		dev_err(&client->dev, "MCU CMD ID version Error-  %d\n", err);
@@ -204,9 +200,9 @@ static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_versi
 		goto exit;
 	}
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_VERSION;
-	err = ar1335_write(client, mc_data_1335, 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_VERSION;
+	err = ar1335_write(client, mc_data_1335_af, 2);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) MCU CMD ID Write PKT fw Version Error - %d \n", __func__,
 				__LINE__, err);
@@ -214,7 +210,7 @@ static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_versi
 		goto exit;
 	}
 
-	err = ar1335_read(client, mc_ret_data_1335, RX_LEN_PKT);
+	err = ar1335_read(client, mc_ret_data_1335_af, RX_LEN_PKT);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) MCU CMD ID Read PKT fw Version Error - %d \n", __func__,
 				__LINE__, err);
@@ -223,8 +219,8 @@ static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_versi
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data_1335[4];
-	calc_crc = errorcheck(&mc_ret_data_1335[2], 2);
+	orig_crc = mc_ret_data_1335_af[4];
+	calc_crc = errorcheck(&mc_ret_data_1335_af[2], 2);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev," %s(%d) MCU CMD ID fw Version Error CRC 0x%02x != 0x%02x \n",
 				__func__, __LINE__, orig_crc, calc_crc);
@@ -232,7 +228,7 @@ static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_versi
 		goto exit;
 	}
 
-	errcode = mc_ret_data_1335[5];
+	errcode = mc_ret_data_1335_af[5];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev," %s(%d) MCU CMD ID fw Errcode - 0x%02x \n", __func__,
 				__LINE__, errcode);
@@ -242,9 +238,9 @@ static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_versi
 
 	/* Read the actual version from MCU*/
 	payload_len =
-	    ((mc_ret_data_1335[2] << 8) | mc_ret_data_1335[3]) + HEADER_FOOTER_SIZE;
-	memset(mc_ret_data_1335, 0x00, payload_len);
-	err = ar1335_read(client, mc_ret_data_1335, payload_len);
+	    ((mc_ret_data_1335_af[2] << 8) | mc_ret_data_1335_af[3]) + HEADER_FOOTER_SIZE;
+	memset(mc_ret_data_1335_af, 0x00, payload_len);
+	err = ar1335_read(client, mc_ret_data_1335_af, payload_len);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) MCU fw CMD ID Read Version Error - %d \n", __func__,
 				__LINE__, err);
@@ -253,8 +249,8 @@ static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_versi
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data_1335[payload_len - 2];
-	calc_crc = errorcheck(&mc_ret_data_1335[2], 32);
+	orig_crc = mc_ret_data_1335_af[payload_len - 2];
+	calc_crc = errorcheck(&mc_ret_data_1335_af[2], 32);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev," %s(%d) MCU fw  CMD ID Version CRC ERROR 0x%02x != 0x%02x \n",
 				__func__, __LINE__, orig_crc, calc_crc);
@@ -263,7 +259,7 @@ static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_versi
 	}
 
 	/* Verify Errcode */
-	errcode = mc_ret_data_1335[payload_len - 1];
+	errcode = mc_ret_data_1335_af[payload_len - 1];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev," %s(%d) MCU fw CMD ID Read Payload Error - 0x%02x \n", __func__,
 				__LINE__, errcode);
@@ -272,12 +268,12 @@ static int mcu_get_fw_version(struct i2c_client *client, unsigned char *fw_versi
 	}
 
 	for (loop = 0 ; loop < VERSION_SIZE ; loop++ )
-		*(fw_version_1335+loop) = mc_ret_data_1335[2+loop];
+		*(fw_version_1335_af+loop) = mc_ret_data_1335_af[2+loop];
 
 	ret = ERRCODE_SUCCESS;
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
+	mutex_unlock(&mcu_i2c_mutex_1335_af);
 
 	return ret;
 }
@@ -286,7 +282,7 @@ exit:
  * mcu_verify_fw_version:
  *
  * Verify the firmware version obtained from the MCU and that found in the
- * firmware text file present in our driver.
+ * firmware file present in our driver.
  *
  * The return value after verification is as follows:
  *
@@ -295,37 +291,37 @@ exit:
  *   - In case the version number mismatches, a negative value indicating error
  *     is returned.
  *
- *   - In case the  force update bit is set in firmware version in the text
+ *   - In case the  force update bit is set in firmware version in the firmware
  *     file, a positive value is returned.
  */
-static int mcu_verify_fw_version(const unsigned char *const fw_version_1335)
+static int mcu_verify_fw_version(const unsigned char *const fw_version_1335_af)
 {
 	int loop, i = 0, ret;
-	char txt_fw_version[32] = {0};
-	unsigned long txt_fw_pos = ARRAY_SIZE(g_mcu_fw_buf_1335)-VERSION_FILE_OFFSET;
+	char fw_version_in_file[32] = {0};
+	unsigned long file_fw_pos = ARRAY_SIZE(g_mcu_fw_buf_1335_af)-VERSION_FILE_OFFSET;
 
-	/* Get Text Firmware version*/
-	for(loop = txt_fw_pos; loop < (txt_fw_pos+64); loop=loop+2) {
-		*(txt_fw_version+i) = (mcu_bload_ascii2hex(g_mcu_fw_buf_1335[loop]) << 4 |
-				mcu_bload_ascii2hex(g_mcu_fw_buf_1335[loop+1]));
+	/* Get Firmware version from the firmware file */
+	for(loop = file_fw_pos; loop < (file_fw_pos+64); loop=loop+2) {
+		*(fw_version_in_file+i) = (mcu_bload_ascii2hex(g_mcu_fw_buf_1335_af[loop]) << 4 |
+				mcu_bload_ascii2hex(g_mcu_fw_buf_1335_af[loop+1]));
 		i++;
 	}
 
-	/* Check for forced/always update field in the text firmware version*/
-	if(txt_fw_version[17] == '1') {
+	/* Check for forced/always update field in the firmware version present in the firmware file */
+	if(fw_version_in_file[17] == '1') {
 
 #ifdef AR1335_DEBUG
 		pr_info("Forced Update Enabled - Firmware Version - (%.32s) \n",
-			fw_version_1335);
+			fw_version_1335_af);
 #endif
 
 		ret = 2;
 	}
 	else {
 		for(i = 0; i < VERSION_SIZE; i++) {
-			if(txt_fw_version[i] != fw_version_1335[i]) {
+			if(fw_version_in_file[i] != fw_version_1335_af[i]) {
 
-				pr_info("Previous Firmware Version - (%.32s)\n", fw_version_1335);
+				pr_info("Previous Firmware Version - (%.32s)\n", fw_version_1335_af);
 
 				ret = -1;
 				break;
@@ -346,35 +342,35 @@ static int mcu_bload_get_version(struct i2c_client *client)
 	/*----------------------------- GET VERSION -------------------- */
 
 	/*   Write Get Version CMD */
-	g_bload_buf_1335[0] = BL_GET_VERSION;
-	g_bload_buf_1335[1] = ~(BL_GET_VERSION);
+	g_bload_buf_1335_af[0] = BL_GET_VERSION;
+	g_bload_buf_1335_af[1] = ~(BL_GET_VERSION);
 
-	ret = ar1335_write(client, g_bload_buf_1335, 2);
+	ret = ar1335_write(client, g_bload_buf_1335_af, 2);
 	if (ret < 0) {
 		dev_err(&client->dev,"Write Failed \n");
 		return -1;
 	}
 
 	/*   Wait for ACK or NACK */
-	ret = ar1335_read(client, g_bload_buf_1335, 1);
+	ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 	if (ret < 0) {
 		dev_err(&client->dev,"Read Failed \n");
 		return -1;
 	}
 
-	if (g_bload_buf_1335[0] != 'y') {
+	if (g_bload_buf_1335_af[0] != 'y') {
 		/*   NACK Received */
 		dev_err(&client->dev," NACK Received... exiting.. \n");
 		return -1;
 	}
 
-	ret = ar1335_read(client, g_bload_buf_1335, 1);
+	ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 	if (ret < 0) {
 		dev_err(&client->dev,"Read Failed \n");
 		return -1;
 	}
 
-	ret = ar1335_read(client, g_bload_buf_1335, 1);
+	ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 	if (ret < 0) {
 		dev_err(&client->dev,"Read Failed\n");
 		return -1;
@@ -396,63 +392,63 @@ static int mcu_bload_erase_flash(struct i2c_client *client)
 
 		checksum = 0x00;
 		/*   Write Erase Pages CMD */
-		g_bload_buf_1335[0] = BL_ERASE_MEM_NS;
-		g_bload_buf_1335[1] = ~(BL_ERASE_MEM_NS);
+		g_bload_buf_1335_af[0] = BL_ERASE_MEM_NS;
+		g_bload_buf_1335_af[1] = ~(BL_ERASE_MEM_NS);
 
-		ret = ar1335_write(client, g_bload_buf_1335, 2);
+		ret = ar1335_write(client, g_bload_buf_1335_af, 2);
 		if (ret < 0) {
 			dev_err(&client->dev,"Write Failed \n");
 			return -1;
 		}
 
 		/*   Wait for ACK or NACK */
-		ret = ar1335_read(client, g_bload_buf_1335, 1);
+		ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 		if (ret < 0) {
 			dev_err(&client->dev,"Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf_1335[0] != RESP_ACK) {
+		if (g_bload_buf_1335_af[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev," NACK Received... exiting.. \n");
 			return -1;
 		}
 
-		g_bload_buf_1335[0] = (MAX_PAGES - 1) >> 8;
-		g_bload_buf_1335[1] = (MAX_PAGES - 1) & 0xFF;
-		g_bload_buf_1335[2] = g_bload_buf_1335[0] ^ g_bload_buf_1335[1];
+		g_bload_buf_1335_af[0] = (MAX_PAGES - 1) >> 8;
+		g_bload_buf_1335_af[1] = (MAX_PAGES - 1) & 0xFF;
+		g_bload_buf_1335_af[2] = g_bload_buf_1335_af[0] ^ g_bload_buf_1335_af[1];
 
-		ret = ar1335_write(client, g_bload_buf_1335, 3);
+		ret = ar1335_write(client, g_bload_buf_1335_af, 3);
 		if (ret < 0) {
 			dev_err(&client->dev,"Write Failed \n");
 			return -1;
 		}
 
 		/*   Wait for ACK or NACK */
-		ret = ar1335_read(client, g_bload_buf_1335, 1);
+		ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 		if (ret < 0) {
 			dev_err(&client->dev,"Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf_1335[0] != RESP_ACK) {
+		if (g_bload_buf_1335_af[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev," NACK Received... exiting.. \n");
 			return -1;
 		}
 
 		for (pagenum = 0; pagenum < MAX_PAGES; pagenum++) {
-			g_bload_buf_1335[(2 * pagenum)] =
+			g_bload_buf_1335_af[(2 * pagenum)] =
 			    (pagenum + (i * MAX_PAGES)) >> 8;
-			g_bload_buf_1335[(2 * pagenum) + 1] =
+			g_bload_buf_1335_af[(2 * pagenum) + 1] =
 			    (pagenum + (i * MAX_PAGES)) & 0xFF;
 			checksum =
-			    checksum ^ g_bload_buf_1335[(2 * pagenum)] ^
-			    g_bload_buf_1335[(2 * pagenum) + 1];
+			    checksum ^ g_bload_buf_1335_af[(2 * pagenum)] ^
+			    g_bload_buf_1335_af[(2 * pagenum) + 1];
 		}
-		g_bload_buf_1335[2 * MAX_PAGES] = checksum;
+		g_bload_buf_1335_af[2 * MAX_PAGES] = checksum;
 
-		ret = ar1335_write(client, g_bload_buf_1335, (2 * MAX_PAGES) + 1);
+		ret = ar1335_write(client, g_bload_buf_1335_af, (2 * MAX_PAGES) + 1);
 		if (ret < 0) {
 			dev_err(&client->dev,"Write Failed \n");
 			return -1;
@@ -460,16 +456,16 @@ static int mcu_bload_erase_flash(struct i2c_client *client)
 
  poll_busy:
 		/*   Wait for ACK or NACK */
-		ret = ar1335_read(client, g_bload_buf_1335, 1);
+		ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 		if (ret < 0) {
 			dev_err(&client->dev,"Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf_1335[0] == RESP_BUSY)
+		if (g_bload_buf_1335_af[0] == RESP_BUSY)
 			goto poll_busy;
 
-		if (g_bload_buf_1335[0] != RESP_ACK) {
+		if (g_bload_buf_1335_af[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev," NACK Received... exiting.. \n");
 			return -1;
@@ -527,82 +523,82 @@ static int mcu_bload_parse_send_cmd(struct i2c_client *client,
 	    && (ihex_rec->addr == 0x0000)
 	    && (ihex_rec->datasize = 0x02)) {
 		/*   Upper 32-bit configuration */
-		g_bload_flashaddr_1335 = (ihex_rec->recdata[0] <<
+		g_bload_flashaddr_1335_af = (ihex_rec->recdata[0] <<
 				     24) | (ihex_rec->recdata[1]
 					    << 16);
 #ifdef AR1335_DEBUG
 		pr_info("Updated Flash Addr = 0x%08x \n",
-			     g_bload_flashaddr_1335);
+			     g_bload_flashaddr_1335_af);
 #endif
 
 	} else if (ihex_rec->rectype == REC_TYPE_DATA) {
 		/*   Flash Data into Flashaddr */
 
-		g_bload_flashaddr_1335 =
-		    (g_bload_flashaddr_1335 & 0xFFFF0000) | (ihex_rec->addr);
-		g_bload_crc16_1335 ^=
+		g_bload_flashaddr_1335_af =
+		    (g_bload_flashaddr_1335_af & 0xFFFF0000) | (ihex_rec->addr);
+		g_bload_crc16_1335_af ^=
 		    mcu_bload_calc_crc16(ihex_rec->recdata, ihex_rec->datasize);
 
 		/*   Write Erase Pages CMD */
-		g_bload_buf_1335[0] = BL_WRITE_MEM_NS;
-		g_bload_buf_1335[1] = ~(BL_WRITE_MEM_NS);
+		g_bload_buf_1335_af[0] = BL_WRITE_MEM_NS;
+		g_bload_buf_1335_af[1] = ~(BL_WRITE_MEM_NS);
 
-		ret = ar1335_write(client, g_bload_buf_1335, 2);
+		ret = ar1335_write(client, g_bload_buf_1335_af, 2);
 		if (ret < 0) {
 			dev_err(&client->dev,"Write Failed \n");
 			return -1;
 		}
 
 		/*   Wait for ACK or NACK */
-		ret = ar1335_read(client, g_bload_buf_1335, 1);
+		ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 		if (ret < 0) {
 			dev_err(&client->dev,"Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf_1335[0] != RESP_ACK) {
+		if (g_bload_buf_1335_af[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev," NACK Received... exiting.. \n");
 			return -1;
 		}
 
-		g_bload_buf_1335[0] = (g_bload_flashaddr_1335 & 0xFF000000) >> 24;
-		g_bload_buf_1335[1] = (g_bload_flashaddr_1335 & 0x00FF0000) >> 16;
-		g_bload_buf_1335[2] = (g_bload_flashaddr_1335 & 0x0000FF00) >> 8;
-		g_bload_buf_1335[3] = (g_bload_flashaddr_1335 & 0x000000FF);
-		g_bload_buf_1335[4] =
-		    g_bload_buf_1335[0] ^ g_bload_buf_1335[1] ^ g_bload_buf_1335[2] ^
-		    g_bload_buf_1335[3];
+		g_bload_buf_1335_af[0] = (g_bload_flashaddr_1335_af & 0xFF000000) >> 24;
+		g_bload_buf_1335_af[1] = (g_bload_flashaddr_1335_af & 0x00FF0000) >> 16;
+		g_bload_buf_1335_af[2] = (g_bload_flashaddr_1335_af & 0x0000FF00) >> 8;
+		g_bload_buf_1335_af[3] = (g_bload_flashaddr_1335_af & 0x000000FF);
+		g_bload_buf_1335_af[4] =
+		    g_bload_buf_1335_af[0] ^ g_bload_buf_1335_af[1] ^ g_bload_buf_1335_af[2] ^
+		    g_bload_buf_1335_af[3];
 
-		ret = ar1335_write(client, g_bload_buf_1335, 5);
+		ret = ar1335_write(client, g_bload_buf_1335_af, 5);
 		if (ret < 0) {
 			dev_err(&client->dev,"Write Failed \n");
 			return -1;
 		}
 
 		/*   Wait for ACK or NACK */
-		ret = ar1335_read(client, g_bload_buf_1335, 1);
+		ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 		if (ret < 0) {
 			dev_err(&client->dev,"Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf_1335[0] != RESP_ACK) {
+		if (g_bload_buf_1335_af[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev," NACK Received... exiting.. \n");
 			return -1;
 		}
 
-		g_bload_buf_1335[0] = ihex_rec->datasize - 1;
-		checksum = g_bload_buf_1335[0];
+		g_bload_buf_1335_af[0] = ihex_rec->datasize - 1;
+		checksum = g_bload_buf_1335_af[0];
 		for (i = 0; i < ihex_rec->datasize; i++) {
-			g_bload_buf_1335[i + 1] = ihex_rec->recdata[i];
-			checksum ^= g_bload_buf_1335[i + 1];
+			g_bload_buf_1335_af[i + 1] = ihex_rec->recdata[i];
+			checksum ^= g_bload_buf_1335_af[i + 1];
 		}
 
-		g_bload_buf_1335[i + 1] = checksum;
+		g_bload_buf_1335_af[i + 1] = checksum;
 
-		ret = ar1335_write(client, g_bload_buf_1335, i + 2);
+		ret = ar1335_write(client, g_bload_buf_1335_af, i + 2);
 		if (ret < 0) {
 			dev_err(&client->dev,"Write Failed \n");
 			return -1;
@@ -610,16 +606,16 @@ static int mcu_bload_parse_send_cmd(struct i2c_client *client,
 
  poll_busy:
 		/*   Wait for ACK or NACK */
-		ret = ar1335_read(client, g_bload_buf_1335, 1);
+		ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 		if (ret < 0) {
 			dev_err(&client->dev,"Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf_1335[0] == RESP_BUSY)
+		if (g_bload_buf_1335_af[0] == RESP_BUSY)
 			goto poll_busy;
 
-		if (g_bload_buf_1335[0] != RESP_ACK) {
+		if (g_bload_buf_1335_af[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev," NACK Received... exiting.. \n");
 			return -1;
@@ -644,16 +640,16 @@ static int mcu_bload_parse_send_cmd(struct i2c_client *client,
 static int mcu_bload_update_fw(struct i2c_client *client)
 {
 	/* exclude NULL character at end of string */
-	unsigned long hex_file_size = ARRAY_SIZE(g_mcu_fw_buf_1335) - 1;
+	unsigned long hex_file_size = ARRAY_SIZE(g_mcu_fw_buf_1335_af) - 1;
 	unsigned char wbuf[MAX_BUF_LEN];
 	int i = 0, recindex = 0, ret = 0;
 
 	for (i = 0; i < hex_file_size; i++) {
-		if ((recindex == 0) && (g_mcu_fw_buf_1335[i] == ':')) {
+		if ((recindex == 0) && (g_mcu_fw_buf_1335_af[i] == ':')) {
 			/*  pr_info("Start of a Record \n"); */
-		} else if (g_mcu_fw_buf_1335[i] == CR) {
+		} else if (g_mcu_fw_buf_1335_af[i] == CR) {
 			/*   No Implementation */
-		} else if (g_mcu_fw_buf_1335[i] == LF) {
+		} else if (g_mcu_fw_buf_1335_af[i] == LF) {
 			if (recindex == 0) {
 				/*   Parsing Complete */
 				break;
@@ -670,20 +666,20 @@ static int mcu_bload_update_fw(struct i2c_client *client)
 
 		} else {
 			/*   Parse Rec Data */
-			if ((ret = mcu_bload_ascii2hex(g_mcu_fw_buf_1335[i])) < 0) {
+			if ((ret = mcu_bload_ascii2hex(g_mcu_fw_buf_1335_af[i])) < 0) {
 				dev_err(&client->dev,
 					"Invalid Character - 0x%02x !! \n",
-				     g_mcu_fw_buf_1335[i]);
+				     g_mcu_fw_buf_1335_af[i]);
 				break;
 			}
 
 			wbuf[recindex] = (0xF0 & (ret << 4));
 			i++;
 
-			if ((ret = mcu_bload_ascii2hex(g_mcu_fw_buf_1335[i])) < 0) {
+			if ((ret = mcu_bload_ascii2hex(g_mcu_fw_buf_1335_af[i])) < 0) {
 				dev_err(&client->dev,
 				    "Invalid Character - 0x%02x !!!! \n",
-				     g_mcu_fw_buf_1335[i]);
+				     g_mcu_fw_buf_1335_af[i]);
 				break;
 			}
 
@@ -694,7 +690,7 @@ static int mcu_bload_update_fw(struct i2c_client *client)
 
 #ifdef AR1335_DEBUG
 	pr_info("Program FLASH Success !! - CRC = 0x%04x \n",
-		     g_bload_crc16_1335);
+		     g_bload_crc16_1335_af);
 #endif
 
 	/* ------------ PROGRAM FLASH END ----------------------- */
@@ -703,76 +699,76 @@ static int mcu_bload_update_fw(struct i2c_client *client)
 }
 
 static int mcu_bload_read(struct i2c_client *client,
-		   unsigned int g_bload_flashaddr_1335, char *bytearray,
+		   unsigned int g_bload_flashaddr_1335_af, char *bytearray,
 		   unsigned int len)
 {
 	int ret = 0;
 
-	g_bload_buf_1335[0] = BL_READ_MEM;
-	g_bload_buf_1335[1] = ~(BL_READ_MEM);
+	g_bload_buf_1335_af[0] = BL_READ_MEM;
+	g_bload_buf_1335_af[1] = ~(BL_READ_MEM);
 
-	ret = ar1335_write(client, g_bload_buf_1335, 2);
+	ret = ar1335_write(client, g_bload_buf_1335_af, 2);
 	if (ret < 0) {
 		dev_err(&client->dev,"Write Failed \n");
 		return -1;
 	}
 
 	/*   Wait for ACK or NACK */
-	ret = ar1335_read(client, g_bload_buf_1335, 1);
+	ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 	if (ret < 0) {
 		dev_err(&client->dev,"Read Failed \n");
 		return -1;
 	}
 
-	if (g_bload_buf_1335[0] != RESP_ACK) {
+	if (g_bload_buf_1335_af[0] != RESP_ACK) {
 		/*   NACK Received */
 		dev_err(&client->dev," NACK Received... exiting.. \n");
 		return -1;
 	}
 
-	g_bload_buf_1335[0] = (g_bload_flashaddr_1335 & 0xFF000000) >> 24;
-	g_bload_buf_1335[1] = (g_bload_flashaddr_1335 & 0x00FF0000) >> 16;
-	g_bload_buf_1335[2] = (g_bload_flashaddr_1335 & 0x0000FF00) >> 8;
-	g_bload_buf_1335[3] = (g_bload_flashaddr_1335 & 0x000000FF);
-	g_bload_buf_1335[4] =
-	    g_bload_buf_1335[0] ^ g_bload_buf_1335[1] ^ g_bload_buf_1335[2] ^ g_bload_buf_1335[3];
+	g_bload_buf_1335_af[0] = (g_bload_flashaddr_1335_af & 0xFF000000) >> 24;
+	g_bload_buf_1335_af[1] = (g_bload_flashaddr_1335_af & 0x00FF0000) >> 16;
+	g_bload_buf_1335_af[2] = (g_bload_flashaddr_1335_af & 0x0000FF00) >> 8;
+	g_bload_buf_1335_af[3] = (g_bload_flashaddr_1335_af & 0x000000FF);
+	g_bload_buf_1335_af[4] =
+	    g_bload_buf_1335_af[0] ^ g_bload_buf_1335_af[1] ^ g_bload_buf_1335_af[2] ^ g_bload_buf_1335_af[3];
 
-	ret = ar1335_write(client, g_bload_buf_1335, 5);
+	ret = ar1335_write(client, g_bload_buf_1335_af, 5);
 	if (ret < 0) {
 		dev_err(&client->dev,"Write Failed \n");
 		return -1;
 	}
 
 	/*   Wait for ACK or NACK */
-	ret = ar1335_read(client, g_bload_buf_1335, 1);
+	ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 	if (ret < 0) {
 		dev_err(&client->dev,"Read Failed \n");
 		return -1;
 	}
 
-	if (g_bload_buf_1335[0] != RESP_ACK) {
+	if (g_bload_buf_1335_af[0] != RESP_ACK) {
 		/*   NACK Received */
 		dev_err(&client->dev," NACK Received... exiting.. \n");
 		return -1;
 	}
 
-	g_bload_buf_1335[0] = len - 1;
-	g_bload_buf_1335[1] = ~(len - 1);
+	g_bload_buf_1335_af[0] = len - 1;
+	g_bload_buf_1335_af[1] = ~(len - 1);
 
-	ret = ar1335_write(client, g_bload_buf_1335, 2);
+	ret = ar1335_write(client, g_bload_buf_1335_af, 2);
 	if (ret < 0) {
 		dev_err(&client->dev,"Write Failed \n");
 		return -1;
 	}
 
 	/*   Wait for ACK or NACK */
-	ret = ar1335_read(client, g_bload_buf_1335, 1);
+	ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 	if (ret < 0) {
 		dev_err(&client->dev,"Read Failed \n");
 		return -1;
 	}
 
-	if (g_bload_buf_1335[0] != RESP_ACK) {
+	if (g_bload_buf_1335_af[0] != RESP_ACK) {
 		/*   NACK Received */
 		dev_err(&client->dev," NACK Received... exiting.. \n");
 		return -1;
@@ -823,6 +819,7 @@ static int mcu_bload_verify_flash(struct i2c_client *client,
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev," CRC verification fail !! 0x%04x != 0x%04x \n",
 		       orig_crc, calc_crc);
+//		return -1;
 	}
 
 #ifdef AR1335_DEBUG
@@ -837,42 +834,42 @@ static int mcu_bload_go(struct i2c_client *client)
 {
 	int ret = 0;
 
-	g_bload_buf_1335[0] = BL_GO;
-	g_bload_buf_1335[1] = ~(BL_GO);
+	g_bload_buf_1335_af[0] = BL_GO;
+	g_bload_buf_1335_af[1] = ~(BL_GO);
 
-	ret = ar1335_write(client, g_bload_buf_1335, 2);
+	ret = ar1335_write(client, g_bload_buf_1335_af, 2);
 	if (ret < 0) {
 		dev_err(&client->dev,"Write Failed \n");
 		return -1;
 	}
 
-	ret = ar1335_read(client, g_bload_buf_1335, 1);
+	ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 	if (ret < 0) {
 		dev_err(&client->dev,"Failed Read 1 \n");
 		return -1;
 	}
 
 	/*   Start Address */
-	g_bload_buf_1335[0] = (FLASH_START_ADDRESS & 0xFF000000) >> 24;
-	g_bload_buf_1335[1] = (FLASH_START_ADDRESS & 0x00FF0000) >> 16;
-	g_bload_buf_1335[2] = (FLASH_START_ADDRESS & 0x0000FF00) >> 8;
-	g_bload_buf_1335[3] = (FLASH_START_ADDRESS & 0x000000FF);
-	g_bload_buf_1335[4] =
-	    g_bload_buf_1335[0] ^ g_bload_buf_1335[1] ^ g_bload_buf_1335[2] ^ g_bload_buf_1335[3];
+	g_bload_buf_1335_af[0] = (FLASH_START_ADDRESS & 0xFF000000) >> 24;
+	g_bload_buf_1335_af[1] = (FLASH_START_ADDRESS & 0x00FF0000) >> 16;
+	g_bload_buf_1335_af[2] = (FLASH_START_ADDRESS & 0x0000FF00) >> 8;
+	g_bload_buf_1335_af[3] = (FLASH_START_ADDRESS & 0x000000FF);
+	g_bload_buf_1335_af[4] =
+	    g_bload_buf_1335_af[0] ^ g_bload_buf_1335_af[1] ^ g_bload_buf_1335_af[2] ^ g_bload_buf_1335_af[3];
 
-	ret = ar1335_write(client, g_bload_buf_1335, 5);
+	ret = ar1335_write(client, g_bload_buf_1335_af, 5);
 	if (ret < 0) {
 		dev_err(&client->dev,"Write Failed \n");
 		return -1;
 	}
 
-	ret = ar1335_read(client, g_bload_buf_1335, 1);
+	ret = ar1335_read(client, g_bload_buf_1335_af, 1);
 	if (ret < 0) {
 		dev_err(&client->dev,"Failed Read 1 \n");
 		return -1;
 	}
 
-	if (g_bload_buf_1335[0] != RESP_ACK) {
+	if (g_bload_buf_1335_af[0] != RESP_ACK) {
 		/*   NACK Received */
 		dev_err(&client->dev," NACK Received... exiting.. \n");
 		return -1;
@@ -884,12 +881,8 @@ static int mcu_bload_go(struct i2c_client *client)
 static int mcu_fw_update(struct i2c_client *client, unsigned char *mcu_fw_version)
 {
 	int ret = 0;
-	g_bload_crc16_1335 = 0;
+	g_bload_crc16_1335_af = 0;
 
-	/*
-	 * TODO: Is this necessary? It seems redundant as it's already called before
-	 * calling this function.
-	 */
 	/* Read Firmware version from bootloader MCU */
 	ret = mcu_bload_get_version(client);
 	if (ret < 0) {
@@ -912,14 +905,14 @@ static int mcu_fw_update(struct i2c_client *client, unsigned char *mcu_fw_versio
 	pr_info("Erase Flash Success !! \n");
 #endif
 
-	/* Read the firmware present in the text file */
+	/* Read the firmware present in the firmware file */
 	if ((ret = mcu_bload_update_fw(client)) < 0) {
 		dev_err(&client->dev," Write Flash FAIL !! \n");
 		goto exit;
 	}
 
 	/* Verify the checksum for the update firmware */
-	if ((ret = mcu_bload_verify_flash(client, g_bload_crc16_1335)) < 0) {
+	if ((ret = mcu_bload_verify_flash(client, g_bload_crc16_1335_af)) < 0) {
 		dev_err(&client->dev," verify_flash FAIL !! \n");
 		goto exit;
 	}
@@ -952,27 +945,27 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 	int ret = 0, err = 0;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
+	mutex_lock(&mcu_i2c_mutex_1335_af);
 
 	/* Array of Ctrl Info */
 	while (1) {
 		/* First Txn Payload length = 0 */
 		payload_len = 2;
 
-		mc_data_1335[0] = CMD_SIGNATURE;
-		mc_data_1335[1] = CMD_ID_GET_CTRL_INFO;
-		mc_data_1335[2] = payload_len >> 8;
-		mc_data_1335[3] = payload_len & 0xFF;
-		mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+		mc_data_1335_af[0] = CMD_SIGNATURE;
+		mc_data_1335_af[1] = CMD_ID_GET_CTRL_INFO;
+		mc_data_1335_af[2] = payload_len >> 8;
+		mc_data_1335_af[3] = payload_len & 0xFF;
+		mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-		ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+		ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
-		mc_data_1335[0] = CMD_SIGNATURE;
-		mc_data_1335[1] = CMD_ID_GET_CTRL_INFO;
-		mc_data_1335[2] = index >> 8;
-		mc_data_1335[3] = index & 0xFF;
-		mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
-		err = ar1335_write(client, mc_data_1335, 5);
+		mc_data_1335_af[0] = CMD_SIGNATURE;
+		mc_data_1335_af[1] = CMD_ID_GET_CTRL_INFO;
+		mc_data_1335_af[2] = index >> 8;
+		mc_data_1335_af[3] = index & 0xFF;
+		mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
+		err = ar1335_write(client, mc_data_1335_af, 5);
 		if (err != 0) {
 			dev_err(&client->dev," %s(%d) Error - %d \n",
 			       __func__, __LINE__, err);
@@ -980,7 +973,7 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 			goto exit;
 		}
 
-		err = ar1335_read(client, mc_ret_data_1335, RX_LEN_PKT);
+		err = ar1335_read(client, mc_ret_data_1335_af, RX_LEN_PKT);
 		if (err != 0) {
 			dev_err(&client->dev," %s(%d) Error - %d \n",
 			       __func__, __LINE__, err);
@@ -989,8 +982,8 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 		}
 
 		/* Verify CRC */
-		orig_crc = mc_ret_data_1335[4];
-		calc_crc = errorcheck(&mc_ret_data_1335[2], 2);
+		orig_crc = mc_ret_data_1335_af[4];
+		calc_crc = errorcheck(&mc_ret_data_1335_af[2], 2);
 		if (orig_crc != calc_crc) {
 			dev_err(&client->dev,
 			    " %s(%d) CRC 0x%02x != 0x%02x \n",
@@ -999,15 +992,15 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 			goto exit;
 		}
 
-		if (((mc_ret_data_1335[2] << 8) | mc_ret_data_1335[3]) == 0) {
+		if (((mc_ret_data_1335_af[2] << 8) | mc_ret_data_1335_af[3]) == 0) {
 			*numctrls = index;
 			break;
 		}
 
 		payload_len =
-		    ((mc_ret_data_1335[2] << 8) | mc_ret_data_1335[3]) +
+		    ((mc_ret_data_1335_af[2] << 8) | mc_ret_data_1335_af[3]) +
 		    HEADER_FOOTER_SIZE;
-		errcode = mc_ret_data_1335[5];
+		errcode = mc_ret_data_1335_af[5];
 		if (errcode != ERRCODE_SUCCESS) {
 			dev_err(&client->dev,
 			    " %s(%d) Errcode - 0x%02x \n",
@@ -1016,8 +1009,8 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 			goto exit;
 		}
 
-		memset(mc_ret_data_1335, 0x00, payload_len);
-		err = ar1335_read(client, mc_ret_data_1335, payload_len);
+		memset(mc_ret_data_1335_af, 0x00, payload_len);
+		err = ar1335_read(client, mc_ret_data_1335_af, payload_len);
 		if (err != 0) {
 			dev_err(&client->dev," %s(%d) Error - %d \n",
 			       __func__, __LINE__, err);
@@ -1026,9 +1019,9 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 		}
 
 		/* Verify CRC */
-		orig_crc = mc_ret_data_1335[payload_len - 2];
+		orig_crc = mc_ret_data_1335_af[payload_len - 2];
 		calc_crc =
-		    errorcheck(&mc_ret_data_1335[2],
+		    errorcheck(&mc_ret_data_1335_af[2],
 				 payload_len - HEADER_FOOTER_SIZE);
 		if (orig_crc != calc_crc) {
 			dev_err(&client->dev,
@@ -1039,7 +1032,7 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 		}
 
 		/* Verify Errcode */
-		errcode = mc_ret_data_1335[payload_len - 1];
+		errcode = mc_ret_data_1335_af[payload_len - 1];
 		if (errcode != ERRCODE_SUCCESS) {
 			dev_err(&client->dev,
 			    " %s(%d) Errcode - 0x%02x \n",
@@ -1053,30 +1046,30 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 
 			/* append ctrl info in array */
 			mcu_cam_ctrl[index].ctrl_id =
-				mc_ret_data_1335[2] << 24 | mc_ret_data_1335[3] << 16 | mc_ret_data_1335[4]
-				<< 8 | mc_ret_data_1335[5];
-			mcu_cam_ctrl[index].ctrl_type = mc_ret_data_1335[6];
+				mc_ret_data_1335_af[2] << 24 | mc_ret_data_1335_af[3] << 16 | mc_ret_data_1335_af[4]
+				<< 8 | mc_ret_data_1335_af[5];
+			mcu_cam_ctrl[index].ctrl_type = mc_ret_data_1335_af[6];
 
 			switch (mcu_cam_ctrl[index].ctrl_type) {
 				case CTRL_STANDARD:
 					mcu_cam_ctrl[index].ctrl_data.std.ctrl_min =
-						mc_ret_data_1335[7] << 24 | mc_ret_data_1335[8] << 16
-						| mc_ret_data_1335[9] << 8 | mc_ret_data_1335[10];
+						mc_ret_data_1335_af[7] << 24 | mc_ret_data_1335_af[8] << 16
+						| mc_ret_data_1335_af[9] << 8 | mc_ret_data_1335_af[10];
 
 					mcu_cam_ctrl[index].ctrl_data.std.ctrl_max =
-						mc_ret_data_1335[11] << 24 | mc_ret_data_1335[12] <<
-						16 | mc_ret_data_1335[13]
-						<< 8 | mc_ret_data_1335[14];
+						mc_ret_data_1335_af[11] << 24 | mc_ret_data_1335_af[12] <<
+						16 | mc_ret_data_1335_af[13]
+						<< 8 | mc_ret_data_1335_af[14];
 
 					mcu_cam_ctrl[index].ctrl_data.std.ctrl_def =
-						mc_ret_data_1335[15] << 24 | mc_ret_data_1335[16] <<
-						16 | mc_ret_data_1335[17]
-						<< 8 | mc_ret_data_1335[18];
+						mc_ret_data_1335_af[15] << 24 | mc_ret_data_1335_af[16] <<
+						16 | mc_ret_data_1335_af[17]
+						<< 8 | mc_ret_data_1335_af[18];
 
 					mcu_cam_ctrl[index].ctrl_data.std.ctrl_step =
-						mc_ret_data_1335[19] << 24 | mc_ret_data_1335[20] <<
-						16 | mc_ret_data_1335[21]
-						<< 8 | mc_ret_data_1335[22];
+						mc_ret_data_1335_af[19] << 24 | mc_ret_data_1335_af[20] <<
+						16 | mc_ret_data_1335_af[21]
+						<< 8 | mc_ret_data_1335_af[22];
 
 					mcu_cam_ctrl[index].mcu_ctrl_index = index;
 					break;
@@ -1136,7 +1129,7 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 
  exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
+	mutex_unlock(&mcu_i2c_mutex_1335_af);
 
 	return ret;
 }
@@ -1152,7 +1145,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 	/* Stream Info Variables */
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
+	mutex_lock(&mcu_i2c_mutex_1335_af);
 
 	/* List all formats from MCU and append to mcu_ar1335_frmfmt array */
 
@@ -1160,20 +1153,20 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 		/* First Txn Payload length = 0 */
 		payload_len = 2;
 
-		mc_data_1335[0] = CMD_SIGNATURE;
-		mc_data_1335[1] = CMD_ID_GET_STREAM_INFO;
-		mc_data_1335[2] = payload_len >> 8;
-		mc_data_1335[3] = payload_len & 0xFF;
-		mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+		mc_data_1335_af[0] = CMD_SIGNATURE;
+		mc_data_1335_af[1] = CMD_ID_GET_STREAM_INFO;
+		mc_data_1335_af[2] = payload_len >> 8;
+		mc_data_1335_af[3] = payload_len & 0xFF;
+		mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-		ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+		ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
-		mc_data_1335[0] = CMD_SIGNATURE;
-		mc_data_1335[1] = CMD_ID_GET_STREAM_INFO;
-		mc_data_1335[2] = index >> 8;
-		mc_data_1335[3] = index & 0xFF;
-		mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
-		err = ar1335_write(client, mc_data_1335, 5);
+		mc_data_1335_af[0] = CMD_SIGNATURE;
+		mc_data_1335_af[1] = CMD_ID_GET_STREAM_INFO;
+		mc_data_1335_af[2] = index >> 8;
+		mc_data_1335_af[3] = index & 0xFF;
+		mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
+		err = ar1335_write(client, mc_data_1335_af, 5);
 		if (err != 0) {
 			dev_err(&client->dev," %s(%d) Error - %d \n",
 			       __func__, __LINE__, err);
@@ -1181,7 +1174,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 			goto exit;
 		}
 
-		err = ar1335_read(client, mc_ret_data_1335, RX_LEN_PKT);
+		err = ar1335_read(client, mc_ret_data_1335_af, RX_LEN_PKT);
 		if (err != 0) {
 			dev_err(&client->dev," %s(%d) Error - %d \n",
 			       __func__, __LINE__, err);
@@ -1190,8 +1183,8 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 		}
 
 		/* Verify CRC */
-		orig_crc = mc_ret_data_1335[4];
-		calc_crc = errorcheck(&mc_ret_data_1335[2], 2);
+		orig_crc = mc_ret_data_1335_af[4];
+		calc_crc = errorcheck(&mc_ret_data_1335_af[2], 2);
 		if (orig_crc != calc_crc) {
 			dev_err(&client->dev,
 				" %s(%d) CRC 0x%02x != 0x%02x \n",
@@ -1200,7 +1193,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 			goto exit;
 		}
 
-		if (((mc_ret_data_1335[2] << 8) | mc_ret_data_1335[3]) == 0) {
+		if (((mc_ret_data_1335_af[2] << 8) | mc_ret_data_1335_af[3]) == 0) {
 			if(stream_info == NULL) {
 				*frm_fmt_size = index;
 			} else {
@@ -1210,9 +1203,9 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 		}
 
 		payload_len =
-		    ((mc_ret_data_1335[2] << 8) | mc_ret_data_1335[3]) +
+		    ((mc_ret_data_1335_af[2] << 8) | mc_ret_data_1335_af[3]) +
 		    HEADER_FOOTER_SIZE;
-		errcode = mc_ret_data_1335[5];
+		errcode = mc_ret_data_1335_af[5];
 		if (errcode != ERRCODE_SUCCESS) {
 			dev_err(&client->dev,
 				" %s(%d) Errcode - 0x%02x \n",
@@ -1221,8 +1214,8 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 			goto exit;
 		}
 
-		memset(mc_ret_data_1335, 0x00, payload_len);
-		err = ar1335_read(client, mc_ret_data_1335, payload_len);
+		memset(mc_ret_data_1335_af, 0x00, payload_len);
+		err = ar1335_read(client, mc_ret_data_1335_af, payload_len);
 		if (err != 0) {
 			dev_err(&client->dev," %s(%d) Error - %d \n",
 			       __func__, __LINE__, err);
@@ -1231,9 +1224,9 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 		}
 
 		/* Verify CRC */
-		orig_crc = mc_ret_data_1335[payload_len - 2];
+		orig_crc = mc_ret_data_1335_af[payload_len - 2];
 		calc_crc =
-		    errorcheck(&mc_ret_data_1335[2],
+		    errorcheck(&mc_ret_data_1335_af[2],
 				 payload_len - HEADER_FOOTER_SIZE);
 		if (orig_crc != calc_crc) {
 			dev_err(&client->dev,
@@ -1244,7 +1237,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 		}
 
 		/* Verify Errcode */
-		errcode = mc_ret_data_1335[payload_len - 1];
+		errcode = mc_ret_data_1335_af[payload_len - 1];
 		if (errcode != ERRCODE_SUCCESS) {
 			dev_err(&client->dev,
 				" %s(%d) Errcode - 0x%02x \n",
@@ -1254,19 +1247,19 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 		}
 		if(stream_info != NULL) {
 			stream_info->fmt_fourcc =
-			    mc_ret_data_1335[2] << 24 | mc_ret_data_1335[3] << 16 | mc_ret_data_1335[4]
-			    << 8 | mc_ret_data_1335[5];
-			stream_info->width = mc_ret_data_1335[6] << 8 | mc_ret_data_1335[7];
-			stream_info->height = mc_ret_data_1335[8] << 8 | mc_ret_data_1335[9];
-			stream_info->frame_rate_type = mc_ret_data_1335[10];
+			    mc_ret_data_1335_af[2] << 24 | mc_ret_data_1335_af[3] << 16 | mc_ret_data_1335_af[4]
+			    << 8 | mc_ret_data_1335_af[5];
+			stream_info->width = mc_ret_data_1335_af[6] << 8 | mc_ret_data_1335_af[7];
+			stream_info->height = mc_ret_data_1335_af[8] << 8 | mc_ret_data_1335_af[9];
+			stream_info->frame_rate_type = mc_ret_data_1335_af[10];
 
 			switch (stream_info->frame_rate_type) {
 			case FRAME_RATE_DISCRETE:
 				stream_info->frame_rate.disc.frame_rate_num =
-				    mc_ret_data_1335[11] << 8 | mc_ret_data_1335[12];
+				    mc_ret_data_1335_af[11] << 8 | mc_ret_data_1335_af[12];
 
 				stream_info->frame_rate.disc.frame_rate_denom =
-				    mc_ret_data_1335[13] << 8 | mc_ret_data_1335[14];
+				    mc_ret_data_1335_af[13] << 8 | mc_ret_data_1335_af[14];
 
 				break;
 
@@ -1275,6 +1268,23 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 					" The Stream format at index 0x%04x has FRAME_RATE_CONTINOUS,"
 				     "which is unsupported !! \n", index);
 
+#if 0
+				stream_info.frame_rate.cont.frame_rate_min_num =
+				    mc_ret_data_1335_af[11] << 8 | mc_ret_data_1335_af[12];
+				stream_info.frame_rate.cont.frame_rate_min_denom =
+				    mc_ret_data_1335_af[13] << 8 | mc_ret_data_1335_af[14];
+
+				stream_info.frame_rate.cont.frame_rate_max_num =
+				    mc_ret_data_1335_af[15] << 8 | mc_ret_data_1335_af[16];
+				stream_info.frame_rate.cont.frame_rate_max_denom =
+				    mc_ret_data_1335_af[17] << 8 | mc_ret_data_1335_af[18];
+
+				stream_info.frame_rate.cont.frame_rate_step_num =
+				    mc_ret_data_1335_af[19] << 8 | mc_ret_data_1335_af[20];
+				stream_info.frame_rate.cont.frame_rate_step_denom =
+				    mc_ret_data_1335_af[21] << 8 | mc_ret_data_1335_af[22];
+				break;
+#endif
 				continue;
 			}
 
@@ -1282,7 +1292,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 			/*
 			 * We check for UYVY here instead of YUYV as the output from the sensor
 			 * is UYVY. We swap it to YUYV only making changes in the platform driver.
-			 */ 
+			 */
 			case V4L2_PIX_FMT_UYVY:
 				/* ar1335_codes is already populated with V4L2_PIX_FMT_YUYV */
 				/* check if width and height are already in array - update frame rate only */
@@ -1342,7 +1352,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client, ISP_STREAM_INFO *st
 
  exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
+	mutex_unlock(&mcu_i2c_mutex_1335_af);
 
 	return ret;
 }
@@ -1406,24 +1416,24 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t * sensor_id)
 	int ret = 0, err = 0;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
+	mutex_lock(&mcu_i2c_mutex_1335_af);
 
 	/* Read the version info. from Micro controller */
 
 	/* First Txn Payload length = 0 */
 	payload_len = 0;
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_GET_SENSOR_ID;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_GET_SENSOR_ID;
+	mc_data_1335_af[2] = payload_len >> 8;
+	mc_data_1335_af[3] = payload_len & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-	ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+	ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_GET_SENSOR_ID;
-	err = ar1335_write(client, mc_data_1335, 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_GET_SENSOR_ID;
+	err = ar1335_write(client, mc_data_1335_af, 2);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -1431,7 +1441,7 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t * sensor_id)
 		goto exit;
 	}
 
-	err = ar1335_read(client, mc_ret_data_1335, RX_LEN_PKT);
+	err = ar1335_read(client, mc_ret_data_1335_af, RX_LEN_PKT);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -1440,8 +1450,8 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t * sensor_id)
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data_1335[4];
-	calc_crc = errorcheck(&mc_ret_data_1335[2], 2);
+	orig_crc = mc_ret_data_1335_af[4];
+	calc_crc = errorcheck(&mc_ret_data_1335_af[2], 2);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev," %s(%d) CRC 0x%02x != 0x%02x \n",
 		       __func__, __LINE__, orig_crc, calc_crc);
@@ -1449,7 +1459,7 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t * sensor_id)
 		goto exit;
 	}
 
-	errcode = mc_ret_data_1335[5];
+	errcode = mc_ret_data_1335_af[5];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev," %s(%d) Errcode - 0x%02x \n",
 		       __func__, __LINE__, errcode);
@@ -1458,10 +1468,10 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t * sensor_id)
 	}
 
 	payload_len =
-	    ((mc_ret_data_1335[2] << 8) | mc_ret_data_1335[3]) + HEADER_FOOTER_SIZE;
+	    ((mc_ret_data_1335_af[2] << 8) | mc_ret_data_1335_af[3]) + HEADER_FOOTER_SIZE;
 
-	memset(mc_ret_data_1335, 0x00, payload_len);
-	err = ar1335_read(client, mc_ret_data_1335, payload_len);
+	memset(mc_ret_data_1335_af, 0x00, payload_len);
+	err = ar1335_read(client, mc_ret_data_1335_af, payload_len);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -1470,8 +1480,8 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t * sensor_id)
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data_1335[payload_len - 2];
-	calc_crc = errorcheck(&mc_ret_data_1335[2], 2);
+	orig_crc = mc_ret_data_1335_af[payload_len - 2];
+	calc_crc = errorcheck(&mc_ret_data_1335_af[2], 2);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev," %s(%d) CRC 0x%02x != 0x%02x \n",
 		       __func__, __LINE__, orig_crc, calc_crc);
@@ -1480,7 +1490,7 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t * sensor_id)
 	}
 
 	/* Verify Errcode */
-	errcode = mc_ret_data_1335[payload_len - 1];
+	errcode = mc_ret_data_1335_af[payload_len - 1];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev," %s(%d) Errcode - 0x%02x \n",
 		       __func__, __LINE__, errcode);
@@ -1488,11 +1498,11 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t * sensor_id)
 		goto exit;
 	}
 
-	*sensor_id = mc_ret_data_1335[2] << 8 | mc_ret_data_1335[3];
+	*sensor_id = mc_ret_data_1335_af[2] << 8 | mc_ret_data_1335_af[3];
 
  exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
+	mutex_unlock(&mcu_i2c_mutex_1335_af);
 
 	return ret;
 }
@@ -1510,18 +1520,18 @@ static int mcu_get_cmd_status(struct i2c_client *client,
 	/* First Txn Payload length = 0 */
 	payload_len = 1;
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_GET_STATUS;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_GET_STATUS;
+	mc_data_1335_af[2] = payload_len >> 8;
+	mc_data_1335_af[3] = payload_len & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-	ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+	ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_GET_STATUS;
-	mc_data_1335[2] = *cmd_id;
-	err = ar1335_write(client, mc_data_1335, 3);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_GET_STATUS;
+	mc_data_1335_af[2] = *cmd_id;
+	err = ar1335_write(client, mc_data_1335_af, 3);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -1529,8 +1539,8 @@ static int mcu_get_cmd_status(struct i2c_client *client,
 	}
 
 	payload_len = CMD_STATUS_MSG_LEN;
-	memset(mc_ret_data_1335, 0x00, payload_len);
-	err = ar1335_read(client, mc_ret_data_1335, payload_len);
+	memset(mc_ret_data_1335_af, 0x00, payload_len);
+	err = ar1335_read(client, mc_ret_data_1335_af, payload_len);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -1538,17 +1548,17 @@ static int mcu_get_cmd_status(struct i2c_client *client,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data_1335[payload_len - 2];
-	calc_crc = errorcheck(&mc_ret_data_1335[2], 3);
+	orig_crc = mc_ret_data_1335_af[payload_len - 2];
+	calc_crc = errorcheck(&mc_ret_data_1335_af[2], 3);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev," %s(%d) CRC 0x%02x != 0x%02x \n",
 		       __func__, __LINE__, orig_crc, calc_crc);
 		return -EINVAL;
 	}
 
-	*cmd_id = mc_ret_data_1335[2];
-	*cmd_status = mc_ret_data_1335[3] << 8 | mc_ret_data_1335[4];
-	*ret_code = mc_ret_data_1335[payload_len - 1];
+	*cmd_id = mc_ret_data_1335_af[2];
+	*cmd_status = mc_ret_data_1335_af[3] << 8 | mc_ret_data_1335_af[4];
+	*ret_code = mc_ret_data_1335_af[payload_len - 1];
 
 	return 0;
 }
@@ -1583,17 +1593,17 @@ static int mcu_isp_init(struct i2c_client *client)
 	/* First Txn Payload length = 0 */
 	payload_len = 0;
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_INIT_CAM;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_INIT_CAM;
+	mc_data_1335_af[2] = payload_len >> 8;
+	mc_data_1335_af[3] = payload_len & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-	ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+	ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_INIT_CAM;
-	err = ar1335_write(client, mc_data_1335, 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_INIT_CAM;
+	err = ar1335_write(client, mc_data_1335_af, 2);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -1642,25 +1652,25 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 	int ret = 0, i = 0, err = 0;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
+	mutex_lock(&mcu_i2c_mutex_1335_af);
 
 	/* First Txn Payload length = 0 */
 	payload_len = 2;
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_GET_CTRL_UI_INFO;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_GET_CTRL_UI_INFO;
+	mc_data_1335_af[2] = payload_len >> 8;
+	mc_data_1335_af[3] = payload_len & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-	ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+	ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_GET_CTRL_UI_INFO;
-	mc_data_1335[2] = index >> 8;
-	mc_data_1335[3] = index & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
-	err = ar1335_write(client, mc_data_1335, 5);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_GET_CTRL_UI_INFO;
+	mc_data_1335_af[2] = index >> 8;
+	mc_data_1335_af[3] = index & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
+	err = ar1335_write(client, mc_data_1335_af, 5);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -1668,7 +1678,7 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 		goto exit;
 	}
 
-	err = ar1335_read(client, mc_ret_data_1335, RX_LEN_PKT);
+	err = ar1335_read(client, mc_ret_data_1335_af, RX_LEN_PKT);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -1677,8 +1687,8 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data_1335[4];
-	calc_crc = errorcheck(&mc_ret_data_1335[2], 2);
+	orig_crc = mc_ret_data_1335_af[4];
+	calc_crc = errorcheck(&mc_ret_data_1335_af[2], 2);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev," %s(%d) CRC 0x%02x != 0x%02x \n",
 		       __func__, __LINE__, orig_crc, calc_crc);
@@ -1687,8 +1697,8 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 	}
 
 	payload_len =
-	    ((mc_ret_data_1335[2] << 8) | mc_ret_data_1335[3]) + HEADER_FOOTER_SIZE;
-	errcode = mc_ret_data_1335[5];
+	    ((mc_ret_data_1335_af[2] << 8) | mc_ret_data_1335_af[3]) + HEADER_FOOTER_SIZE;
+	errcode = mc_ret_data_1335_af[5];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev," %s(%d) Errcode - 0x%02x \n",
 		       __func__, __LINE__, errcode);
@@ -1696,8 +1706,8 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 		goto exit;
 	}
 
-	memset(mc_ret_data_1335, 0x00, payload_len);
-	err = ar1335_read(client, mc_ret_data_1335, payload_len);
+	memset(mc_ret_data_1335_af, 0x00, payload_len);
+	err = ar1335_read(client, mc_ret_data_1335_af, payload_len);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -1706,9 +1716,9 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data_1335[payload_len - 2];
+	orig_crc = mc_ret_data_1335_af[payload_len - 2];
 	calc_crc =
-	    errorcheck(&mc_ret_data_1335[2], payload_len - HEADER_FOOTER_SIZE);
+	    errorcheck(&mc_ret_data_1335_af[2], payload_len - HEADER_FOOTER_SIZE);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev," %s(%d) CRC 0x%02x != 0x%02x \n",
 		       __func__, __LINE__, orig_crc, calc_crc);
@@ -1717,7 +1727,7 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 	}
 
 	/* Verify Errcode */
-	errcode = mc_ret_data_1335[payload_len - 1];
+	errcode = mc_ret_data_1335_af[payload_len - 1];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev," %s(%d) Errcode - 0x%02x \n",
 		       __func__, __LINE__, errcode);
@@ -1725,14 +1735,14 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 		goto exit;
 	}
 
-	strncpy((char *)mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_name, &mc_ret_data_1335[2],MAX_CTRL_UI_STRING_LEN);
+	strncpy((char *)mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_name, &mc_ret_data_1335_af[2],MAX_CTRL_UI_STRING_LEN);
 
-	mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_ui_type = mc_ret_data_1335[34];
-	mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_ui_flags = mc_ret_data_1335[35] << 8 |
-	    mc_ret_data_1335[36];
+	mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_ui_type = mc_ret_data_1335_af[34];
+	mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_ui_flags = mc_ret_data_1335_af[35] << 8 |
+	    mc_ret_data_1335_af[36];
 
 	if (mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_ui_type == V4L2_CTRL_TYPE_MENU) {
-		mcu_ui_info->ctrl_ui_data.ctrl_menu_info.num_menu_elem = mc_ret_data_1335[37];
+		mcu_ui_info->ctrl_ui_data.ctrl_menu_info.num_menu_elem = mc_ret_data_1335_af[37];
 
 		mcu_ui_info->ctrl_ui_data.ctrl_menu_info.menu =
 		    devm_kzalloc(&client->dev,((mcu_ui_info->ctrl_ui_data.ctrl_menu_info.num_menu_elem +1) * sizeof(char *)), GFP_KERNEL);
@@ -1740,7 +1750,7 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 			mcu_ui_info->ctrl_ui_data.ctrl_menu_info.menu[i] =
 			    devm_kzalloc(&client->dev,MAX_CTRL_UI_STRING_LEN, GFP_KERNEL);
 			strncpy((char *)mcu_ui_info->ctrl_ui_data.ctrl_menu_info.menu[i],
-				&mc_ret_data_1335[38 +(i *MAX_CTRL_UI_STRING_LEN)], MAX_CTRL_UI_STRING_LEN);
+				&mc_ret_data_1335_af[38 +(i *MAX_CTRL_UI_STRING_LEN)], MAX_CTRL_UI_STRING_LEN);
 
 #ifdef AR1335_DEBUG
 			pr_info(" Menu Element %d : %s \n",
@@ -1754,99 +1764,10 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 
  exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
+	mutex_unlock(&mcu_i2c_mutex_1335_af);
 
 	return ret;
 
-}
-
-static int mcu_isp_configuration(uint8_t cmd_id,struct i2c_client *client)
-{
-    	unsigned char mc_data_1335[100];
-	uint32_t payload_len = 0;
-
-	uint16_t payload_data;
-	uint16_t cmd_status = 0;
-	uint8_t retcode = 0;
-	int retry = 1000, err = 0;
-
-	/*lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
-	/* First Txn Payload length = 0 */
-	payload_len = 2;
-
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = cmd_id;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
-
-	ar1335_write(client, mc_data_1335, TX_LEN_PKT);
-
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = cmd_id;
-	
-	switch(cmd_id) {
-		case CMD_ID_LANE_CONFIG:
-			/*Lane configuration */
-			payload_data = ar1335_data.mipi_lane_config == 4 ? NUM_LANES_4: NUM_LANES_2;
-			mc_data_1335[2] = payload_data >> 8;
-			mc_data_1335[3] = payload_data & 0xFF;
-			break;
-		case CMD_ID_MIPI_CLK_CONFIG:
-			/* MIPI CLK Configuration */
-			payload_data = ar1335_data.mipi_clk_config;
-			mc_data_1335[2] = payload_data >> 8;
-			mc_data_1335[3] = payload_data & 0xFF;
-			break;
-		default:
-			dev_err(&client->dev, "MCU ISP CONF Error\n");
-			err = -1;
-			goto exit;
-	}
-
-	/* CRC*/
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], payload_len);
-	err = ar1335_write(client, mc_data_1335, payload_len+3);
-	if (err != 0) {
-		dev_err(&client->dev, " %s(%d) Error - %d \n",
-			__func__, __LINE__, err);
-		goto exit;
-	}
-
-
-	while (--retry > 0) {
-		msleep(20);
-		if (mcu_get_cmd_status(client, &cmd_id, &cmd_status, &retcode) <
-		    0) {
-			dev_err(&client->dev, " %s(%d) Error \n",
-				__func__, __LINE__);
-			err = -EIO;
-			goto exit;
-		}
-
-		if ((cmd_status == MCU_CMD_STATUS_ISP_UNINIT) &&
-		    ((retcode == ERRCODE_SUCCESS) || retcode == ERRCODE_ALREADY)) {
-			err = 0;
-			goto exit;
-		}
-
-		if ((retcode != ERRCODE_BUSY) &&
-		    ((cmd_status != MCU_CMD_STATUS_ISP_UNINIT))) {
-			dev_err(&client->dev,
-				"(%s) %d Error STATUS = 0x%04x RET = 0x%02x\n",
-				__func__, __LINE__, cmd_status, retcode);
-			err = -EIO;
-			goto exit;
-		}
-
-	}
-
-	err = -ETIMEDOUT;
- exit:
-	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
-	return err;
 }
 
 static int mcu_stream_config(struct i2c_client *client, uint32_t format,
@@ -1860,7 +1781,7 @@ static int mcu_stream_config(struct i2c_client *client, uint32_t format,
 	static uint16_t prev_index = 0xFFFE;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
+	mutex_lock(&mcu_i2c_mutex_1335_af);
 
 	cmd_id = CMD_ID_STREAM_CONFIG;
 	if (mcu_get_cmd_status(client, &cmd_id, &cmd_status, &retcode) < 0) {
@@ -1879,7 +1800,6 @@ static int mcu_stream_config(struct i2c_client *client, uint32_t format,
 	}
 
 	for (loop = 0;(&streamdb[loop]) != NULL; loop++) {
-		pr_info("streamdb[%d]=%d, mode=%d",loop,streamdb[loop],mode);
 		if (streamdb[loop] == mode) {
 			index = loop + frate_index;
 			break;
@@ -1911,43 +1831,43 @@ issue_cmd:
 	/* First Txn Payload length = 0 */
 	payload_len = 14;
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_STREAM_CONFIG;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_STREAM_CONFIG;
+	mc_data_1335_af[2] = payload_len >> 8;
+	mc_data_1335_af[3] = payload_len & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-	ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+	ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_STREAM_CONFIG;
-	mc_data_1335[2] = index >> 8;
-	mc_data_1335[3] = index & 0xFF;
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_STREAM_CONFIG;
+	mc_data_1335_af[2] = index >> 8;
+	mc_data_1335_af[3] = index & 0xFF;
 
 	/* Format Fourcc - currently only YUYV */
-	mc_data_1335[4] = format >> 24;
-	mc_data_1335[5] = format >> 16;
-	mc_data_1335[6] = format >> 8;
-	mc_data_1335[7] = format & 0xFF;
+	mc_data_1335_af[4] = format >> 24;
+	mc_data_1335_af[5] = format >> 16;
+	mc_data_1335_af[6] = format >> 8;
+	mc_data_1335_af[7] = format & 0xFF;
 
 	/* width */
-	mc_data_1335[8] = ar1335_data.mcu_cam_frmfmt[mode].size.width >> 8;
-	mc_data_1335[9] = ar1335_data.mcu_cam_frmfmt[mode].size.width & 0xFF;
+	mc_data_1335_af[8] = ar1335_data.mcu_cam_frmfmt[mode].size.width >> 8;
+	mc_data_1335_af[9] = ar1335_data.mcu_cam_frmfmt[mode].size.width & 0xFF;
 
 	/* height */
-	mc_data_1335[10] = ar1335_data.mcu_cam_frmfmt[mode].size.height >> 8;
-	mc_data_1335[11] = ar1335_data.mcu_cam_frmfmt[mode].size.height & 0xFF;
+	mc_data_1335_af[10] = ar1335_data.mcu_cam_frmfmt[mode].size.height >> 8;
+	mc_data_1335_af[11] = ar1335_data.mcu_cam_frmfmt[mode].size.height & 0xFF;
 
 	/* frame rate num */
-	mc_data_1335[12] = ar1335_data.mcu_cam_frmfmt[mode].framerates[frate_index] >> 8;
-	mc_data_1335[13] = ar1335_data.mcu_cam_frmfmt[mode].framerates[frate_index] & 0xFF;
+	mc_data_1335_af[12] = ar1335_data.mcu_cam_frmfmt[mode].framerates[frate_index] >> 8;
+	mc_data_1335_af[13] = ar1335_data.mcu_cam_frmfmt[mode].framerates[frate_index] & 0xFF;
 
 	/* frame rate denom */
-	mc_data_1335[14] = 0x00;
-	mc_data_1335[15] = 0x01;
+	mc_data_1335_af[14] = 0x00;
+	mc_data_1335_af[15] = 0x01;
 
-	mc_data_1335[16] = errorcheck(&mc_data_1335[2], 14);
-	err = ar1335_write(client, mc_data_1335, 17);
+	mc_data_1335_af[16] = errorcheck(&mc_data_1335_af[2], 14);
+	err = ar1335_write(client, mc_data_1335_af, 17);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -2000,7 +1920,7 @@ exit:
 		prev_index = index;
 
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
+	mutex_unlock(&mcu_i2c_mutex_1335_af);
 
 	return ret;
 }
@@ -2014,22 +1934,22 @@ static int mcu_isp_power_down(struct i2c_client *client)
 	int retry = 1000, err = 0;
 
 	/*lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
+	mutex_lock(&mcu_i2c_mutex_1335_af);
 
 	/* First Txn Payload length = 0 */
 	payload_len = 0;
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_ISP_PDOWN;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_ISP_PDOWN;
+	mc_data_1335_af[2] = payload_len >> 8;
+	mc_data_1335_af[3] = payload_len & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-	ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+	ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_ISP_PDOWN;
-	err = ar1335_write(client, mc_data_1335, 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_ISP_PDOWN;
+	err = ar1335_write(client, mc_data_1335_af, 2);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n",
 			__func__, __LINE__, err);
@@ -2067,7 +1987,7 @@ static int mcu_isp_power_down(struct i2c_client *client)
 	err = -ETIMEDOUT;
  exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
+	mutex_unlock(&mcu_i2c_mutex_1335_af);
 	return err;
 }
 
@@ -2080,21 +2000,21 @@ static int mcu_isp_power_wakeup(struct i2c_client *client)
 	int retry = 1000, err = 0;
 
 	/*lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
+	mutex_lock(&mcu_i2c_mutex_1335_af);
 	/* First Txn Payload length = 0 */
 	payload_len = 0;
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_ISP_PUP;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_ISP_PUP;
+	mc_data_1335_af[2] = payload_len >> 8;
+	mc_data_1335_af[3] = payload_len & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-	ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+	ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_ISP_PUP;
-	err = ar1335_write(client, mc_data_1335, 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_ISP_PUP;
+	err = ar1335_write(client, mc_data_1335_af, 2);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n",
 			__func__, __LINE__, err);
@@ -2132,7 +2052,7 @@ static int mcu_isp_power_wakeup(struct i2c_client *client)
 	err = -ETIMEDOUT;
  exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
+	mutex_unlock(&mcu_i2c_mutex_1335_af);
 	return err;
 }
 
@@ -2147,7 +2067,7 @@ static int mcu_set_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	uint32_t ctrl_id = 0;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
+	mutex_lock(&mcu_i2c_mutex_1335_af);
 
 	ctrl_id = arg_ctrl_id;
 
@@ -2168,41 +2088,41 @@ static int mcu_set_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	/* First Txn Payload length = 0 */
 	payload_len = 11;
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_SET_CTRL;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_SET_CTRL;
+	mc_data_1335_af[2] = payload_len >> 8;
+	mc_data_1335_af[3] = payload_len & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-	ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+	ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
 	/* Second Txn */
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_SET_CTRL;
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_SET_CTRL;
 
 	/* Index */
-	mc_data_1335[2] = index >> 8;
-	mc_data_1335[3] = index & 0xFF;
+	mc_data_1335_af[2] = index >> 8;
+	mc_data_1335_af[3] = index & 0xFF;
 
 	/* Control ID */
-	mc_data_1335[4] = ctrl_id >> 24;
-	mc_data_1335[5] = ctrl_id >> 16;
-	mc_data_1335[6] = ctrl_id >> 8;
-	mc_data_1335[7] = ctrl_id & 0xFF;
+	mc_data_1335_af[4] = ctrl_id >> 24;
+	mc_data_1335_af[5] = ctrl_id >> 16;
+	mc_data_1335_af[6] = ctrl_id >> 8;
+	mc_data_1335_af[7] = ctrl_id & 0xFF;
 
 	/* Ctrl Type */
-	mc_data_1335[8] = ctrl_type;
+	mc_data_1335_af[8] = ctrl_type;
 
 	/* Ctrl Value */
-	mc_data_1335[9] = curr_val >> 24;
-	mc_data_1335[10] = curr_val >> 16;
-	mc_data_1335[11] = curr_val >> 8;
-	mc_data_1335[12] = curr_val & 0xFF;
+	mc_data_1335_af[9] = curr_val >> 24;
+	mc_data_1335_af[10] = curr_val >> 16;
+	mc_data_1335_af[11] = curr_val >> 8;
+	mc_data_1335_af[12] = curr_val & 0xFF;
 
 	/* CRC */
-	mc_data_1335[13] = errorcheck(&mc_data_1335[2], 11);
+	mc_data_1335_af[13] = errorcheck(&mc_data_1335_af[2], 11);
 
-	err = ar1335_write(client, mc_data_1335, 14);
+	err = ar1335_write(client, mc_data_1335_af, 14);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -2238,7 +2158,7 @@ static int mcu_set_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 
  exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
+	mutex_unlock(&mcu_i2c_mutex_1335_af);
 
 	return ret;
 }
@@ -2254,7 +2174,7 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	uint32_t ctrl_id = 0;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex_1335);
+	mutex_lock(&mcu_i2c_mutex_1335_af);
 
 	ctrl_id = arg_ctrl_id;
 
@@ -2283,20 +2203,20 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	/* First Txn Payload length = 2 */
 	payload_len = 2;
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_GET_CTRL;
-	mc_data_1335[2] = payload_len >> 8;
-	mc_data_1335[3] = payload_len & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_GET_CTRL;
+	mc_data_1335_af[2] = payload_len >> 8;
+	mc_data_1335_af[3] = payload_len & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
 
-	ar1335_write(client, mc_data_1335, TX_LEN_PKT);
+	ar1335_write(client, mc_data_1335_af, TX_LEN_PKT);
 
-	mc_data_1335[0] = CMD_SIGNATURE;
-	mc_data_1335[1] = CMD_ID_GET_CTRL;
-	mc_data_1335[2] = index >> 8;
-	mc_data_1335[3] = index & 0xFF;
-	mc_data_1335[4] = errorcheck(&mc_data_1335[2], 2);
-	err = ar1335_write(client, mc_data_1335, 5);
+	mc_data_1335_af[0] = CMD_SIGNATURE;
+	mc_data_1335_af[1] = CMD_ID_GET_CTRL;
+	mc_data_1335_af[2] = index >> 8;
+	mc_data_1335_af[3] = index & 0xFF;
+	mc_data_1335_af[4] = errorcheck(&mc_data_1335_af[2], 2);
+	err = ar1335_write(client, mc_data_1335_af, 5);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -2304,7 +2224,7 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 		goto exit;
 	}
 
-	err = ar1335_read(client, mc_ret_data_1335, RX_LEN_PKT);
+	err = ar1335_read(client, mc_ret_data_1335_af, RX_LEN_PKT);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -2313,8 +2233,8 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data_1335[4];
-	calc_crc = errorcheck(&mc_ret_data_1335[2], 2);
+	orig_crc = mc_ret_data_1335_af[4];
+	calc_crc = errorcheck(&mc_ret_data_1335_af[2], 2);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev," %s(%d) CRC 0x%02x != 0x%02x \n",
 		       __func__, __LINE__, orig_crc, calc_crc);
@@ -2322,12 +2242,12 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 		goto exit;
 	}
 
-	if (((mc_ret_data_1335[2] << 8) | mc_ret_data_1335[3]) == 0) {
+	if (((mc_ret_data_1335_af[2] << 8) | mc_ret_data_1335_af[3]) == 0) {
 		ret = -EIO;
 		goto exit;
 	}
 
-	errcode = mc_ret_data_1335[5];
+	errcode = mc_ret_data_1335_af[5];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev," %s(%d) Errcode - 0x%02x \n",
 		       __func__, __LINE__, errcode);
@@ -2336,9 +2256,9 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	}
 
 	payload_len =
-	    ((mc_ret_data_1335[2] << 8) | mc_ret_data_1335[3]) + HEADER_FOOTER_SIZE;
-	memset(mc_ret_data_1335, 0x00, payload_len);
-	err = ar1335_read(client, mc_ret_data_1335, payload_len);
+	    ((mc_ret_data_1335_af[2] << 8) | mc_ret_data_1335_af[3]) + HEADER_FOOTER_SIZE;
+	memset(mc_ret_data_1335_af, 0x00, payload_len);
+	err = ar1335_read(client, mc_ret_data_1335_af, payload_len);
 	if (err != 0) {
 		dev_err(&client->dev," %s(%d) Error - %d \n", __func__,
 		       __LINE__, err);
@@ -2347,9 +2267,9 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data_1335[payload_len - 2];
+	orig_crc = mc_ret_data_1335_af[payload_len - 2];
 	calc_crc =
-	    errorcheck(&mc_ret_data_1335[2], payload_len - HEADER_FOOTER_SIZE);
+	    errorcheck(&mc_ret_data_1335_af[2], payload_len - HEADER_FOOTER_SIZE);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev," %s(%d) CRC 0x%02x != 0x%02x \n",
 		       __func__, __LINE__, orig_crc, calc_crc);
@@ -2358,7 +2278,7 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	}
 
 	/* Verify Errcode */
-	errcode = mc_ret_data_1335[payload_len - 1];
+	errcode = mc_ret_data_1335_af[payload_len - 1];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev," %s(%d) Errcode - 0x%02x \n",
 		       __func__, __LINE__, errcode);
@@ -2368,13 +2288,13 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 
 	/* Ctrl type starts from index 6 */
 
-	*ctrl_type = mc_ret_data_1335[6];
+	*ctrl_type = mc_ret_data_1335_af[6];
 
 	switch (*ctrl_type) {
 	case CTRL_STANDARD:
 		*curr_val =
-		    mc_ret_data_1335[7] << 24 | mc_ret_data_1335[8] << 16 | mc_ret_data_1335[9]
-		    << 8 | mc_ret_data_1335[10];
+		    mc_ret_data_1335_af[7] << 24 | mc_ret_data_1335_af[8] << 16 | mc_ret_data_1335_af[9]
+		    << 8 | mc_ret_data_1335_af[10];
 		break;
 
 	case CTRL_EXTENDED:
@@ -2384,7 +2304,7 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 
  exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex_1335);
+	mutex_unlock(&mcu_i2c_mutex_1335_af);
 
 	return ret;
 }
@@ -2394,6 +2314,41 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
  *  END of MCU realed functions
  * ---------------------------------------------------------
  */
+
+/*
+ * Macro to retry a specific sequence (a function call) for a specific
+ * number of times to check if the sequence succeeds within the specified
+ * number of tries.
+ *
+ * Arguments:
+ * retries - number of retries for the sequence
+ * sequence - the sequence to retry (typically a function call).
+ *            It is assumed that the sequence returns a negative value in
+ *            case of an error.
+ *
+ * Evaluation value:
+ * - The macro evaluates to zero if the sequence succeeds within the specified
+ *   number of tries.
+ * - The macro evaluates to a negative value when the sequence does not succeed
+ *   within the specified number of tries.
+ *
+ */
+#define RETRY_SEQUENCE(retries, sequence)		\
+({							\
+	int status = 0, err, retry;			\
+	for (retry = 0; retry < retries; retry++) {	\
+		err = sequence;				\
+							\
+		if (err < 0)				\
+			msleep(5);			\
+		else					\
+			break;				\
+	}						\
+	if (retry == retries) {				\
+		status = err;				\
+	}						\
+	status;						\
+})
 
 static void toggle_gpio(unsigned int gpio, int val)
 {
@@ -2819,12 +2774,14 @@ static int ar1335_s_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *param)
 	     ret++) {
 		if ((ar1335_data.mcu_cam_frmfmt[mode].framerates[ret] ==
 		     param->parm.capture.timeperframe.denominator)) {
+			int retries = retries_for_i2c_commands * 2;
 			ar1335_data.frate_index = ret;
 
 			/* call stream config with width, height, frame rate */
-			err =
-				mcu_stream_config(client, fourcc, mode,
-						ar1335_data.frate_index);
+			err = RETRY_SEQUENCE(
+				retries,
+				mcu_stream_config(client, fourcc, mode,	ar1335_data.frate_index)
+			);
 			if (err < 0) {
 				dev_err(&client->dev, "%s: Failed stream_config \n", __func__);
 				return err;
@@ -2841,15 +2798,63 @@ static int ar1335_s_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *param)
 
 static int ar1335_s_power(struct v4l2_subdev *sd, int on)
 {
-	
-	/* Perform Power On/Off Sequence - if any  */
+	struct i2c_client *client = v4l2_get_subdevdata(sd);
+	int err = 0,
+	    retries = retries_for_i2c_commands * 2;
+
+	if (on) {
+		if (ar1335_data.power_on == 0) {
+			/*
+			 * We power wakeup the ISP only for the first time.
+			 */
+			/* Perform power wakeup sequence */
+			err = RETRY_SEQUENCE(
+				retries,
+				mcu_isp_power_wakeup(client)
+			);
+			if (err < 0)
+			{
+				dev_err(&client->dev, "%s: Failed Power_wakeup\n", __func__);
+				return err;
+			}
+
+			mdelay(80);
+
+#ifdef AR1335_DEBUG
+			pr_info("Sensor Hardware Power Up Sequence\n");
+#endif
+		}
+
+		ar1335_data.power_on++;
+	}
+	else {
+		if (ar1335_data.power_on == 1) {
+			/* Perform power down Sequence */
+			err = RETRY_SEQUENCE(
+				retries,
+				mcu_isp_power_down(client)
+			);
+			if (err < 0)
+			{
+				dev_err(&client->dev, "%s: Failed power_down\n", __func__);
+				return err;
+			}
+
+#ifdef AR1335_DEBUG
+			pr_info("Sensor Hardware Power Down Sequence\n");
+#endif
+		}
+
+		ar1335_data.power_on--;
+	}
+
 	return 0;
 }
 
 static int ar1335_get_fmt(struct v4l2_subdev *sd,struct v4l2_subdev_pad_config *cfg,struct v4l2_subdev_format *format)
 {
 	int ret = 0;
-	
+
 	if (format->pad)
 		return -EINVAL;
 
@@ -2858,7 +2863,7 @@ static int ar1335_get_fmt(struct v4l2_subdev *sd,struct v4l2_subdev_pad_config *
 	format->format.field = V4L2_FIELD_NONE;
 
 	format->format.width	= ar1335_data.pix.width;
-	format->format.height	= ar1335_data.pix.height; 
+	format->format.height	= ar1335_data.pix.height;
 
 	return ret;
 }
@@ -2866,9 +2871,10 @@ static int ar1335_get_fmt(struct v4l2_subdev *sd,struct v4l2_subdev_pad_config *
 static int ar1335_set_fmt(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config *cfg,
 			  struct v4l2_subdev_format *format)
 {
-	int ret = 0, i;
+	int i;
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	int flag = 0, err = 0;
+	int retries = retries_for_i2c_commands * 2;
 
 	format->format.code = ar1335_data.fmt.code;
 	format->format.colorspace = ar1335_data.fmt.colorspace;
@@ -2883,7 +2889,7 @@ static int ar1335_set_fmt(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config 
 			break;
 		}
 	}
-	
+
 	if(flag == 0) {
 		format->format.width	= ar1335_data.pix.width;
 		format->format.height	= ar1335_data.pix.height;
@@ -2895,10 +2901,17 @@ static int ar1335_set_fmt(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config 
 	}
 
 	/* call stream config with width, height, frame rate */
-	err =
-		mcu_stream_config(client, ar1335_data.pix.pixelformat, ar1335_data.mcu_cam_frmfmt[i].mode,
-				ar1335_data.frate_index);
-	if (err < 0) {
+	err = RETRY_SEQUENCE(
+		retries,
+		mcu_stream_config(
+			client,
+			ar1335_data.pix.pixelformat,
+			ar1335_data.mcu_cam_frmfmt[i].mode,
+			ar1335_data.frate_index
+		)
+	);
+	if (err < 0)
+	{
 		dev_err(&client->dev, "%s: Failed stream_config \n", __func__);
 		return err;
 	}
@@ -2909,7 +2922,7 @@ static int ar1335_set_fmt(struct v4l2_subdev *sd, struct v4l2_subdev_pad_config 
 
 	mdelay(10);
 
-	return ret;
+	return 0;
 }
 
 static int ar1335_link_setup(struct media_entity *entity,
@@ -3026,8 +3039,8 @@ static int ar1335_ctrls_init(ISP_CTRL_INFO *mcu_cam_ctrls)
 
 static int ar1335_verify_mcu(struct i2c_client *client)
 {
-	int ret = 0, try = 0;
-	unsigned char fw_version_1335[32] = {0};
+	int ret = 0;
+	unsigned char fw_version_1335_af[32] = {0};
 
 	if (client == NULL)
 	{
@@ -3035,232 +3048,118 @@ static int ar1335_verify_mcu(struct i2c_client *client)
 		return -EINVAL;
 	}
 
-	/*
-	 * Try to boot the MCU into firmware mode.
-	 *
-	 * We do this only when the reset_gpio and pwdn_gpio are
-	 * available.
-	 */
-	if (gpios_available_1335())
+	toggle_gpio(pwdn_gpio, 0);
+	msleep(1);
+	toggle_gpio(reset_gpio, 0);
+	msleep(1);
+	toggle_gpio(reset_gpio, 1);
+	msleep(10);
+
+	ret = mcu_get_fw_version(client, fw_version_1335_af);
+
+	if (ret == 0)
 	{
-		toggle_gpio(pwdn_gpio, 0);
-		msleep(10);
-		toggle_gpio(reset_gpio, 0);
-		msleep(10);
-		toggle_gpio(reset_gpio, 1);
-		msleep(500);
-
-		for(try = 0; try < 10; try++) {	
-			ret = mcu_get_fw_version(client, fw_version_1335);
-			if(ret < 0) {
-				msleep(100);
-				continue;
-			} else {
-				break;
-			}
-		}
-
-		if (ret == 0)
-		{
-			ret = mcu_verify_fw_version(fw_version_1335);
-		}
-		else
-		{
-			dev_dbg(
-				&client->dev,
-				"Could not read the firmware version from the MCU\n"
-			);
-			pr_info(" Could not read the firmware version from the MCU, tries=%d\n", try+1);
-		}
-
-		/*
-		 * Try booting and flashing in bootloader mode when an error is detected
-		 * or the force update bit is set in the firmware version
-		 */
-		if (ret != 0) {
-			int loop = 0;
-
-			/*
-			 * Verification of the MCU in firmware mode failed so
-			 * try to boot the MCU in bootloader mode.
-			 */
-
-			pr_info(" Trying to Detect Bootloader mode\n");
-
-			if (gpios_available_1335())
-			{
-				toggle_gpio(reset_gpio, 0);
-				msleep(10);
-				toggle_gpio(pwdn_gpio, 1);
-				msleep(100);
-				toggle_gpio(reset_gpio, 1);
-				msleep(100);
-			}
-
-			for(loop = 0; loop < 10; loop++) {
-				ret = mcu_bload_get_version(client);
-				if (ret < 0) {
-					/* Trial and Error for 1 second (100ms * 10) */
-					msleep(100);
-					continue;
-				} else {
-#ifdef AR1335_DEBUG
-					pr_info(" Get Bload Version Success\n");
-#endif
-					break;
-				}
-			}
-
-			if(loop == 10) {
-				dev_err(&client->dev, "Error getting firmware version in bootloader mode\n");
-				return -EINVAL;
-			}
-
-			if (mcu_fw_update(client, NULL) < 0) {
-				dev_err(&client->dev, "Error when trying to update the firmware\n");
-				return -EFAULT;
-			}
-
-			if (gpios_available_1335())
-			{
-				toggle_gpio(pwdn_gpio, 0);
-			}
-
-			/* Allow FW Updated MCU to reboot */
-			msleep(500);
-
-			/*
-			 * Ensure the firmware has been flashed correctly by getting the version
-			 * of the firmware (in firmware mode).
-			 */
-			for(loop = 0; loop < 100; loop++) {
-				ret = mcu_get_fw_version(client, fw_version_1335);
-
-				if (ret == 0)
-				{
-					ret = mcu_verify_fw_version(fw_version_1335);
-				}
-
-				if (ret < 0) {
-					/* Trial and Error for 10 seconds (100ms * 100) */
-					msleep(100);
-					continue;
-				} else {
-#ifdef AR1335_DEBUG
-					pr_info(" Get FW Version Success\n");
-#endif
-					break;
-				}
-			}
-
-			if(loop == 100) {
-				dev_err(
-					&client->dev,
-					"Couldn't get firmware version correctly after update (did the update fail?\n"
-				);
-				return -EINVAL;
-			}
-		}
-
+		ret = mcu_verify_fw_version(fw_version_1335_af);
 	}
 	else
 	{
-		static const char *const flash_error_message =
-			"Please connect only one camera and fix the MCU.\n"
-			"Hint: Connected only one camera? Is someone else using the "
-			"power down/reset GPIOs?\n";
+		dev_dbg(
+			&client->dev,
+			"Could not read the firmware version from the MCU\n"
+		);
+	}
+
+	/*
+	 * Try booting and flashing in bootloader mode when an error is detected
+	 * or the force update bit is set in the firmware version
+	 */
+	if (ret != 0) {
+		int loop = 0;
 
 		/*
-		 * When we do not have the reset GPIO, we cannot toggle it
-		 * to make the MCU switch to firmware mode. So, we try getting
-		 * the MCU into firmware assuming it is currently in
-		 * bootloader mode.
-		 *
-		 * The following sequence is required for switching it to
-		 * firmware mode.
+		 * Verification of the MCU in firmware mode failed so
+		 * try to boot the MCU in bootloader mode.
 		 */
-		int loop, get_firmware_version = 0;
 
-		/*
-		 * We would have to verify that the MCU is in bootloader mode
-		 * before sending the command to make it switch to firmware mode.
-		 *
-		 * So, we try to get the version of the bootloader.
-		 */
-		for(loop = 0; loop < 10; loop++)
-		{
+#ifdef AR1335_DEBUG
+		pr_info(" Trying to Detect Bootloader mode\n");
+#endif
+
+		toggle_gpio(reset_gpio, 0);
+		msleep(1);
+		toggle_gpio(pwdn_gpio, 1);
+		msleep(1);
+		toggle_gpio(reset_gpio, 1);
+		msleep(1);
+
+		for(loop = 0; loop < 10; loop++) {
 			ret = mcu_bload_get_version(client);
-			if (ret < 0)
-			{
-				/* Trial and Error for 1 second (100ms * 10) */
-				msleep(100);
-			}
-			else
-		        {
+			if (ret < 0) {
+				msleep(1);
+				continue;
+			} else {
+#ifdef AR1335_DEBUG
 				pr_info(" Get Bload Version Success\n");
+#endif
 				break;
 			}
 		}
 
-		if(loop == 10)
-		{
-			dev_err(&client->dev, "couldn't get bootloader version\n");
-
-
-			get_firmware_version = 1;
-
-			msleep(1000);
+		if(loop == 10) {
+			dev_err(&client->dev, "Error getting firmware version in bootloader mode\n");
+			return -EFAULT;
 		}
-		else
-		{
-			/*
-			 * We retry if we could boot into firmware mode as we're
-			 * currently in bootloader mode (as mcu_bload_get_version
-			 * succeeded).
-			 */
-			ret = mcu_bload_go(client);
-			if (ret < 0) {
-				dev_err(&client->dev,"couldn't switch to firmware mode.\n");
-				dev_err(&client->dev, flash_error_message);
-				return -EINVAL;
-			}
-			else {
-				msleep(10);
-				get_firmware_version = 1;
-			}
+
+		pr_info("Updating firmware. Please wait ...\n");
+
+		if (mcu_fw_update(client, NULL) < 0) {
+			dev_err(&client->dev, "Error when trying to update the firmware\n");
+			return -EFAULT;
 		}
+
+		toggle_gpio(pwdn_gpio, 0);
+
+		/* Allow FW Updated MCU to reboot */
+		msleep(10);
 
 		/*
-		 * We should verify if we have the version of the MCU we
-		 * need. If not, we let the user know about it and exit
-		 * the probe.
+		 * Ensure the firmware has been flashed correctly by getting the version
+		 * of the firmware (in firmware mode).
 		 */
-		if (get_firmware_version)
-		{
-			ret = mcu_get_fw_version(client, fw_version_1335);
+		for(loop = 0; loop < 100; loop++) {
+			ret = mcu_get_fw_version(client, fw_version_1335_af);
+
 			if (ret == 0)
 			{
-				ret = mcu_verify_fw_version(fw_version_1335);
-			}
-			else
-			{
-				dev_err(&client->dev, "couldn't get the MCU firmware version");
-				dev_err(&client->dev, flash_error_message);
-				return -EINVAL;
+				ret = mcu_verify_fw_version(fw_version_1335_af);
 			}
 
-			if (ret != 0)
-			{
-				dev_err(&client->dev, "wrong MCU firmware version");
-				dev_err(&client->dev, flash_error_message);
-				return -EINVAL;
+			if (ret < 0) {
+				msleep(1);
+				continue;
+			} else {
+#ifdef AR1335_DEBUG
+				pr_info(" Get FW Version Success\n");
+#endif
+				break;
 			}
+		}
+
+		if(loop == 100) {
+			dev_err(
+				&client->dev,
+				"Couldn't get firmware version correctly after update (did the update fail?)\n"
+			);
+			return ret;
+		}
+		else {
+			pr_info("Firmware has been updated successfully.\n");
 		}
 	}
 
-	dev_info(&client->dev, "Current Firmware Version - (%.32s)\n", fw_version_1335);
+	dev_info(&client->dev, "Current Firmware Version - (%.32s)\n", fw_version_1335_af);
 
-	return 0;
+	return ret;
 }
 
 static int ar1335_parse_and_get_clocks(struct device *dev)
@@ -3281,7 +3180,6 @@ static int ar1335_parse_and_get_clocks(struct device *dev)
 		return PTR_ERR(ar1335_data.sensor_clk);
 	}
 
-	/*mclk reserved for future use*/
 	retval = of_property_read_u32(dev->of_node, "mclk",
 					&(ar1335_data.mclk));
 	if (retval) {
@@ -3289,7 +3187,6 @@ static int ar1335_parse_and_get_clocks(struct device *dev)
 		return retval;
 	}
 
-	/*mclk_source reserved for future use*/
 	retval = of_property_read_u32(dev->of_node, "mclk_source",
 					(u32 *) &(ar1335_data.mclk_source));
 	if (retval) {
@@ -3402,71 +3299,83 @@ static int ar1335_probe(struct i2c_client *client,
 
 	clk_prepare_enable(ar1335_data.sensor_clk);
 
-	/*
-	 * We usually get and set/enable regulators here. But it doesn't
-	 * seem to be needed here as the Variscite EVK seems to be supplying
-	 * the required voltage directly without us needing to set it.
-	 */
-	toggle_gpio(reset_gpio, 1);
-	msleep(500);
-
-	ret = ar1335_verify_mcu(client);
-	if (ret)
+	ret = RETRY_SEQUENCE(
+		retries_for_i2c_commands,
+		ar1335_verify_mcu(client)
+	);
+	if (ret < 0)
 	{
 		dev_err(dev, "Error occurred when verifying MCU\n");
-		return ret;
-	}
-
-	ar1335_data.mipi_lane_config = 4;
-	ret = mcu_isp_configuration(CMD_ID_LANE_CONFIG, client);
-	if(ret)
-	{
-		dev_err(dev, "Error occurred in configuring mipi lanes\n");
 		return ret;
 	}
 
 	/*
 	 * Query the number of controls from MCU
 	 */
-	if (mcu_count_or_list_ctrls(client, NULL, &num_ctrls) < 0) {
+	ret = RETRY_SEQUENCE(
+		retries_for_i2c_commands,
+		mcu_count_or_list_ctrls(client, NULL, &num_ctrls)
+	);
+	if (ret < 0)
+	{
 		dev_err(dev, "%s, Failed to get number of controls for sensor\n", __func__);
-		return -EFAULT;
+		return ret;
 	}
 
 	/*
 	 * Query the number for Formats available from MCU
 	 */
-	if (mcu_count_or_list_fmts(client, NULL, &frm_fmt_size) < 0) {
+	ret = RETRY_SEQUENCE(
+		retries_for_i2c_commands,
+		mcu_count_or_list_fmts(client, NULL, &frm_fmt_size)
+	);
+	if (ret < 0)
+	{
 		dev_err(dev, "%s, Failed to get number of formats for sensor\n", __func__);
-		return -EFAULT;
+		return ret;
 	}
 
 	/*
 	 * Initialise the MCU related data as we're about to use them.
 	 */
 	ret = mcu_data_init(dev, frm_fmt_size);
-	if (ret)
+	if (ret < 0)
 	{
 		dev_err(dev, "%s: failed to initialize MCU related data\n", __func__);
-		return -EFAULT;
+		return ret;
 	}
 
-	if (mcu_get_sensor_id(client, &sensor_id) < 0) {
+	ret = RETRY_SEQUENCE(
+		retries_for_i2c_commands,
+		mcu_get_sensor_id(client, &sensor_id)
+	);
+	if (ret < 0)
+	{
 		dev_err(dev, "Unable to get MCU Sensor ID \n");
-		return -EFAULT;
+		return ret;
 	}
 
-	if (mcu_isp_init(client) < 0) {
+	ret = RETRY_SEQUENCE(
+		retries_for_i2c_commands,
+		mcu_isp_init(client)
+	);
+	if (ret < 0)
+	{
 		dev_err(dev, "Unable to INIT ISP \n");
-		return -EFAULT;
+		return ret;
 	}
 
 	/*
 	 * Enumerate the Formats in the sensor
 	 */
-	if (mcu_count_or_list_fmts(client, stream_info, &frm_fmt_size) < 0) {
+	ret = RETRY_SEQUENCE(
+		retries_for_i2c_commands,
+		mcu_count_or_list_fmts(client, stream_info, &frm_fmt_size)
+	);
+	if (ret < 0)
+	{
 		dev_err(dev, "Unable to enumerate the formats in the sensor\n");
-		return -EFAULT;
+		return ret;
 	}
 
 	/*
@@ -3481,14 +3390,19 @@ static int ar1335_probe(struct i2c_client *client,
 	ar1335_data.pix.height = AR1335_DEFAULT_HEIGHT;
 	ar1335_data.streamcap.capability =  V4L2_MODE_HIGHQUALITY | V4L2_CAP_TIMEPERFRAME;
 	ar1335_data.streamcap.capturemode = AR1335_DEFAULT_MODE;
+	ar1335_data.streamcap.timeperframe.denominator = AR1335_DEFAULT_FPS;
+	ar1335_data.streamcap.timeperframe.numerator = 1;
 	ar1335_data.num_frm_fmts = frm_fmt_size;
 	ar1335_data.power_on = 0;
 
 	/*
 	 * Configure the stream with default configuration
 	 */
-	ret = ar1335_init(client);
-	if (ret)
+	ret = RETRY_SEQUENCE(
+		retries_for_i2c_commands,
+		ar1335_init(client)
+	);
+	if (ret < 0)
 	{
 		dev_err(dev, "Failed to initialise the device with default configuration\n");
 		return ret;
@@ -3499,8 +3413,11 @@ static int ar1335_probe(struct i2c_client *client,
 	/*
 	 * Initialize Controls by getting details about the controls from the MCU
 	 */
-	ret = ar1335_ctrls_init(mcu_ctrl_info);
-	if (ret)
+	ret = RETRY_SEQUENCE(
+		retries_for_i2c_commands,
+		ar1335_ctrls_init(mcu_ctrl_info)
+	);
+	if (ret < 0)
 	{
 		dev_warn(dev, "Failed to initialise the controls. Controls might not work\n");
 	}
@@ -3520,31 +3437,18 @@ static int ar1335_probe(struct i2c_client *client,
 				mcu_ctrl_info[i].ctrl_id == 0x9a0926
 			)
 			{
-				/*
-				 * We know that the MCU would fail when we
-				 * try to write the V4L2_CID_ROI_EXPOSURE
-				 * control as we are not in the correct auto
-				 * exposure mode by default. So, skip it.
-				 */
 				continue;
 			}
 
-			ret = ar1335_s_ctrl(&ar1335_data.subdev, &ctrl);
+			ret = RETRY_SEQUENCE(
+				retries_for_i2c_commands,
+				ar1335_s_ctrl(&ar1335_data.subdev, &ctrl)
+			);
 			if (ret < 0)
 			{
-				dev_err(dev, "Failed to write default value for a control: %d; Control ID: %x\n", i, mcu_ctrl_info[i].ctrl_id);
+				dev_warn(dev, "Failed to write default value for a control: %d; Control ID: %x\n", i, mcu_ctrl_info[i].ctrl_id);
 			}
 		}
-	}
-
-	struct v4l2_control ctrl = {
-		.id = 0x009a0901,
-		.value = 0
-	};
-	ret = ar1335_s_ctrl(&ar1335_data.subdev, &ctrl);
-	if (ret < 0)
-	{
-		dev_err(dev, "Failed to write default value for a control;exposure auto\n");
 	}
 
 	ar1335_data.subdev.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
@@ -3578,6 +3482,7 @@ static int ar1335_probe(struct i2c_client *client,
  */
 static int ar1335_remove(struct i2c_client *client)
 {
+//	int err;
 	v4l2_async_unregister_subdev(&ar1335_data.subdev);
 
 	clk_disable_unprepare(ar1335_data.sensor_clk);
@@ -3602,27 +3507,27 @@ static int ar1335_remove(struct i2c_client *client)
 	return 0;
 }
 
-static const struct i2c_device_id ar1335_id[] = {
-	{"ar1335", 0},
+static const struct i2c_device_id ar1335_af_id[] = {
+	{"ar1335_af", 0},
 	{}
 };
 
-MODULE_DEVICE_TABLE(i2c, ar1335_id);
+MODULE_DEVICE_TABLE(i2c, ar1335_af_id);
 
 static struct i2c_driver ar1335_i2c_driver = {
 	.driver = {
-		   .name = "ar1335",
+		   .name = "ar1335_af",
 		   .owner = THIS_MODULE
 	},
 	.probe = ar1335_probe,
 	.remove = ar1335_remove,
-	.id_table = ar1335_id,
+	.id_table = ar1335_af_id,
 };
 
 
 module_i2c_driver(ar1335_i2c_driver);
 
-MODULE_DESCRIPTION("AR1335 V4L2 driver");
+MODULE_DESCRIPTION("AR1335 Auto-Focus V4L2 driver");
 MODULE_AUTHOR("e-con Systems");
 MODULE_LICENSE("GPL v2");
 MODULE_VERSION("1.0");

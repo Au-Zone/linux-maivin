@@ -1,5 +1,5 @@
 /*
- * ar0521.c - AR0521 sensor driver
+ * ar0234.c - AR0234 sensor driver
  * Copyright (c) 2020-2021, e-con Systems.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -23,36 +23,34 @@
 #include <linux/pinctrl/consumer.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
-#include <linux/regulator/consumer.h>
-#include "ar0521.h"
-#include "mcu_firmware.h"
+
+#include "ar0234.h"
+#include "mcu_firmware_ar0234.h"
 
 /*
-#define AR0521_DEBUG 1
+#define AR0234_DEBUG 1
 */
 
 /*!
  * Maintains the information on the current state of the sensor.
  */
-static struct ar0521 ar0521_data;
+static struct ar0234 ar0234_data;
 
-//static int pwdn_gpio, reset_gpio, csi_enable;
 static int pwdn_gpio, reset_gpio;
 
-int gpios_available(void)
+int gpios_available_2304(void)
 {
-	//return (pwdn_gpio >= 0) && (reset_gpio >= 0);
-	return true;
+	return (pwdn_gpio >= 0) && (reset_gpio >= 0);
 }
 
 /**********************************************************************
  *
- * START of AR0521 related code
+ * START of AR0234 related code
  *
  **********************************************************************
  */
 
-static int ar0521_write(struct i2c_client *client, u8 *val, u32 count)
+static int ar0234_write(struct i2c_client *client, u8 *val, u32 count)
 {
 	int ret;
 	struct i2c_msg msg = {
@@ -73,7 +71,7 @@ static int ar0521_write(struct i2c_client *client, u8 *val, u32 count)
 	return 0;
 }
 
-static int ar0521_read(struct i2c_client *client, u8 *val, u32 count)
+static int ar0234_read(struct i2c_client *client, u8 *val, u32 count)
 {
 	int ret;
 	struct i2c_msg msg = {
@@ -129,8 +127,8 @@ err:
  *
  *   seem to directly use platform specific functions:
  *
- *   	x ar0521_write
- *   	x ar0521_read
+ *   	x ar0234_write
+ *   	x ar0234_read
  *
  *   This could be passed in as a function pointer.
  */
@@ -183,7 +181,7 @@ static unsigned char errorcheck(char *data, unsigned int len)
  * else a negative value indicating error is returned.
  */
 static int mcu_get_fw_version(struct i2c_client *client,
-			      unsigned char *fw_version)
+			      unsigned char *fw_version_0234)
 {
 	uint32_t payload_len = 0;
 	uint8_t errcode = ERRCODE_SUCCESS, orig_crc = 0, calc_crc = 0;
@@ -191,24 +189,24 @@ static int mcu_get_fw_version(struct i2c_client *client,
 	/* Query firmware version from MCU */
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_VERSION;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_VERSION;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	err = ar0521_write(client, mc_data, TX_LEN_PKT);
+	err = ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 	if (err != 0) {
 		dev_err(&client->dev, "MCU CMD ID version Error-  %d\n", err);
 		ret = -EIO;
 		goto exit;
 	}
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_VERSION;
-	err = ar0521_write(client, mc_data, 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_VERSION;
+	err = ar0234_write(client, mc_data_0234, 2);
 	if (err != 0) {
 		dev_err(&client->dev,
 			" %s(%d) MCU CMD ID Write PKT fw Version Error - %d \n",
@@ -217,7 +215,7 @@ static int mcu_get_fw_version(struct i2c_client *client,
 		goto exit;
 	}
 
-	err = ar0521_read(client, mc_ret_data, RX_LEN_PKT);
+	err = ar0234_read(client, mc_ret_data_0234, RX_LEN_PKT);
 	if (err != 0) {
 		dev_err(&client->dev,
 			" %s(%d) MCU CMD ID Read PKT fw Version Error - %d \n",
@@ -227,8 +225,8 @@ static int mcu_get_fw_version(struct i2c_client *client,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data[4];
-	calc_crc = errorcheck(&mc_ret_data[2], 2);
+	orig_crc = mc_ret_data_0234[4];
+	calc_crc = errorcheck(&mc_ret_data_0234[2], 2);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev,
 			" %s(%d) MCU CMD ID fw Version Error CRC 0x%02x != 0x%02x \n",
@@ -237,7 +235,7 @@ static int mcu_get_fw_version(struct i2c_client *client,
 		goto exit;
 	}
 
-	errcode = mc_ret_data[5];
+	errcode = mc_ret_data_0234[5];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev,
 			" %s(%d) MCU CMD ID fw Errcode - 0x%02x \n", __func__,
@@ -247,10 +245,10 @@ static int mcu_get_fw_version(struct i2c_client *client,
 	}
 
 	/* Read the actual version from MCU*/
-	payload_len =
-		((mc_ret_data[2] << 8) | mc_ret_data[3]) + HEADER_FOOTER_SIZE;
-	memset(mc_ret_data, 0x00, payload_len);
-	err = ar0521_read(client, mc_ret_data, payload_len);
+	payload_len = ((mc_ret_data_0234[2] << 8) | mc_ret_data_0234[3]) +
+		      HEADER_FOOTER_SIZE;
+	memset(mc_ret_data_0234, 0x00, payload_len);
+	err = ar0234_read(client, mc_ret_data_0234, payload_len);
 	if (err != 0) {
 		dev_err(&client->dev,
 			" %s(%d) MCU fw CMD ID Read Version Error - %d \n",
@@ -260,8 +258,8 @@ static int mcu_get_fw_version(struct i2c_client *client,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data[payload_len - 2];
-	calc_crc = errorcheck(&mc_ret_data[2], 32);
+	orig_crc = mc_ret_data_0234[payload_len - 2];
+	calc_crc = errorcheck(&mc_ret_data_0234[2], 32);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev,
 			" %s(%d) MCU fw  CMD ID Version CRC ERROR 0x%02x != 0x%02x \n",
@@ -271,7 +269,7 @@ static int mcu_get_fw_version(struct i2c_client *client,
 	}
 
 	/* Verify Errcode */
-	errcode = mc_ret_data[payload_len - 1];
+	errcode = mc_ret_data_0234[payload_len - 1];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev,
 			" %s(%d) MCU fw CMD ID Read Payload Error - 0x%02x \n",
@@ -281,12 +279,12 @@ static int mcu_get_fw_version(struct i2c_client *client,
 	}
 
 	for (loop = 0; loop < VERSION_SIZE; loop++)
-		*(fw_version + loop) = mc_ret_data[2 + loop];
+		*(fw_version_0234 + loop) = mc_ret_data_0234[2 + loop];
 
 	ret = ERRCODE_SUCCESS;
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 
 	return ret;
 }
@@ -307,34 +305,34 @@ exit:
  *   - In case the  force update bit is set in firmware version in the text
  *     file, a positive value is returned.
  */
-static int mcu_verify_fw_version(const unsigned char *const fw_version)
+static int mcu_verify_fw_version(const unsigned char *const fw_version_0234)
 {
 	int loop, i = 0, ret;
 	char txt_fw_version[32] = { 0 };
 	unsigned long txt_fw_pos =
-		ARRAY_SIZE(g_mcu_fw_buf) - VERSION_FILE_OFFSET;
+		ARRAY_SIZE(g_mcu_fw_buf_ar0234) - VERSION_FILE_OFFSET;
 
 	/* Get Text Firmware version*/
 	for (loop = txt_fw_pos; loop < (txt_fw_pos + 64); loop = loop + 2) {
 		*(txt_fw_version + i) =
-			(mcu_bload_ascii2hex(g_mcu_fw_buf[loop]) << 4 |
-			 mcu_bload_ascii2hex(g_mcu_fw_buf[loop + 1]));
+			(mcu_bload_ascii2hex(g_mcu_fw_buf_ar0234[loop]) << 4 |
+			 mcu_bload_ascii2hex(g_mcu_fw_buf_ar0234[loop + 1]));
 		i++;
 	}
 
 	/* Check for forced/always update field in the text firmware version*/
 	if (txt_fw_version[17] == '1') {
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 		pr_info("Forced Update Enabled - Firmware Version - (%.32s) \n",
-			fw_version);
+			fw_version_0234);
 #endif
 
 		ret = 2;
 	} else {
 		for (i = 0; i < VERSION_SIZE; i++) {
-			if (txt_fw_version[i] != fw_version[i]) {
+			if (txt_fw_version[i] != fw_version_0234[i]) {
 				pr_info("Previous Firmware Version - (%.32s)\n",
-					fw_version);
+					fw_version_0234);
 
 				ret = -1;
 				break;
@@ -355,36 +353,35 @@ static int mcu_bload_get_version(struct i2c_client *client)
 	/*----------------------------- GET VERSION -------------------- */
 
 	/*   Write Get Version CMD */
-	g_bload_buf[0] = BL_GET_VERSION;
-	g_bload_buf[1] = ~(BL_GET_VERSION);
+	g_bload_buf_0234[0] = BL_GET_VERSION;
+	g_bload_buf_0234[1] = ~(BL_GET_VERSION);
 
-	ret = ar0521_write(client, g_bload_buf, 2);
+	ret = ar0234_write(client, g_bload_buf_0234, 2);
 	if (ret < 0) {
-		dev_err(&client->dev,
-			"Write Failed trying to get bl version!! \n");
+		dev_err(&client->dev, "Write Failed \n");
 		return -1;
 	}
 
 	/*   Wait for ACK or NACK */
-	ret = ar0521_read(client, g_bload_buf, 1);
+	ret = ar0234_read(client, g_bload_buf_0234, 1);
 	if (ret < 0) {
 		dev_err(&client->dev, "Read Failed \n");
 		return -1;
 	}
 
-	if (g_bload_buf[0] != 'y') {
+	if (g_bload_buf_0234[0] != 'y') {
 		/*   NACK Received */
 		dev_err(&client->dev, " NACK Received... exiting.. \n");
 		return -1;
 	}
 
-	ret = ar0521_read(client, g_bload_buf, 1);
+	ret = ar0234_read(client, g_bload_buf_0234, 1);
 	if (ret < 0) {
 		dev_err(&client->dev, "Read Failed \n");
 		return -1;
 	}
 
-	ret = ar0521_read(client, g_bload_buf, 1);
+	ret = ar0234_read(client, g_bload_buf_0234, 1);
 	if (ret < 0) {
 		dev_err(&client->dev, "Read Failed\n");
 		return -1;
@@ -405,62 +402,63 @@ static int mcu_bload_erase_flash(struct i2c_client *client)
 	for (i = 0; i < NUM_ERASE_CYCLES; i++) {
 		checksum = 0x00;
 		/*   Write Erase Pages CMD */
-		g_bload_buf[0] = BL_ERASE_MEM_NS;
-		g_bload_buf[1] = ~(BL_ERASE_MEM_NS);
+		g_bload_buf_0234[0] = BL_ERASE_MEM_NS;
+		g_bload_buf_0234[1] = ~(BL_ERASE_MEM_NS);
 
-		ret = ar0521_write(client, g_bload_buf, 2);
+		ret = ar0234_write(client, g_bload_buf_0234, 2);
 		if (ret < 0) {
 			dev_err(&client->dev, "Write Failed \n");
 			return -1;
 		}
 
 		/*   Wait for ACK or NACK */
-		ret = ar0521_read(client, g_bload_buf, 1);
+		ret = ar0234_read(client, g_bload_buf_0234, 1);
 		if (ret < 0) {
 			dev_err(&client->dev, "Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf[0] != RESP_ACK) {
+		if (g_bload_buf_0234[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev, " NACK Received... exiting.. \n");
 			return -1;
 		}
 
-		g_bload_buf[0] = (MAX_PAGES - 1) >> 8;
-		g_bload_buf[1] = (MAX_PAGES - 1) & 0xFF;
-		g_bload_buf[2] = g_bload_buf[0] ^ g_bload_buf[1];
+		g_bload_buf_0234[0] = (MAX_PAGES - 1) >> 8;
+		g_bload_buf_0234[1] = (MAX_PAGES - 1) & 0xFF;
+		g_bload_buf_0234[2] = g_bload_buf_0234[0] ^ g_bload_buf_0234[1];
 
-		ret = ar0521_write(client, g_bload_buf, 3);
+		ret = ar0234_write(client, g_bload_buf_0234, 3);
 		if (ret < 0) {
 			dev_err(&client->dev, "Write Failed \n");
 			return -1;
 		}
 
 		/*   Wait for ACK or NACK */
-		ret = ar0521_read(client, g_bload_buf, 1);
+		ret = ar0234_read(client, g_bload_buf_0234, 1);
 		if (ret < 0) {
 			dev_err(&client->dev, "Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf[0] != RESP_ACK) {
+		if (g_bload_buf_0234[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev, " NACK Received... exiting.. \n");
 			return -1;
 		}
 
 		for (pagenum = 0; pagenum < MAX_PAGES; pagenum++) {
-			g_bload_buf[(2 * pagenum)] =
+			g_bload_buf_0234[(2 * pagenum)] =
 				(pagenum + (i * MAX_PAGES)) >> 8;
-			g_bload_buf[(2 * pagenum) + 1] =
+			g_bload_buf_0234[(2 * pagenum) + 1] =
 				(pagenum + (i * MAX_PAGES)) & 0xFF;
-			checksum = checksum ^ g_bload_buf[(2 * pagenum)] ^
-				   g_bload_buf[(2 * pagenum) + 1];
+			checksum = checksum ^ g_bload_buf_0234[(2 * pagenum)] ^
+				   g_bload_buf_0234[(2 * pagenum) + 1];
 		}
-		g_bload_buf[2 * MAX_PAGES] = checksum;
+		g_bload_buf_0234[2 * MAX_PAGES] = checksum;
 
-		ret = ar0521_write(client, g_bload_buf, (2 * MAX_PAGES) + 1);
+		ret = ar0234_write(client, g_bload_buf_0234,
+				   (2 * MAX_PAGES) + 1);
 		if (ret < 0) {
 			dev_err(&client->dev, "Write Failed \n");
 			return -1;
@@ -468,22 +466,22 @@ static int mcu_bload_erase_flash(struct i2c_client *client)
 
 	poll_busy:
 		/*   Wait for ACK or NACK */
-		ret = ar0521_read(client, g_bload_buf, 1);
+		ret = ar0234_read(client, g_bload_buf_0234, 1);
 		if (ret < 0) {
 			dev_err(&client->dev, "Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf[0] == RESP_BUSY)
+		if (g_bload_buf_0234[0] == RESP_BUSY)
 			goto poll_busy;
 
-		if (g_bload_buf[0] != RESP_ACK) {
+		if (g_bload_buf_0234[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev, " NACK Received... exiting.. \n");
 			return -1;
 		}
 
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 		pr_info(" ERASE Sector %d success !! \n", i + 1);
 #endif
 	}
@@ -535,79 +533,84 @@ static int mcu_bload_parse_send_cmd(struct i2c_client *client,
 	if ((ihex_rec->rectype == REC_TYPE_ELA) && (ihex_rec->addr == 0x0000) &&
 	    (ihex_rec->datasize = 0x02)) {
 		/*   Upper 32-bit configuration */
-		g_bload_flashaddr = (ihex_rec->recdata[0] << 24) |
-				    (ihex_rec->recdata[1] << 16);
-#ifdef AR0521_DEBUG
-		pr_info("Updated Flash Addr = 0x%08x \n", g_bload_flashaddr);
+		g_bload_flashaddr_0234 = (ihex_rec->recdata[0] << 24) |
+					 (ihex_rec->recdata[1] << 16);
+#ifdef AR0234_DEBUG
+		pr_info("Updated Flash Addr = 0x%08x \n",
+			g_bload_flashaddr_0234);
 #endif
 
 	} else if (ihex_rec->rectype == REC_TYPE_DATA) {
 		/*   Flash Data into Flashaddr */
 
-		g_bload_flashaddr =
-			(g_bload_flashaddr & 0xFFFF0000) | (ihex_rec->addr);
-		g_bload_crc16 ^= mcu_bload_calc_crc16(ihex_rec->recdata,
-						      ihex_rec->datasize);
+		g_bload_flashaddr_0234 = (g_bload_flashaddr_0234 & 0xFFFF0000) |
+					 (ihex_rec->addr);
+		g_bload_crc16_ar0234 ^= mcu_bload_calc_crc16(
+			ihex_rec->recdata, ihex_rec->datasize);
 
 		/*   Write Erase Pages CMD */
-		g_bload_buf[0] = BL_WRITE_MEM_NS;
-		g_bload_buf[1] = ~(BL_WRITE_MEM_NS);
+		g_bload_buf_0234[0] = BL_WRITE_MEM_NS;
+		g_bload_buf_0234[1] = ~(BL_WRITE_MEM_NS);
 
-		ret = ar0521_write(client, g_bload_buf, 2);
+		ret = ar0234_write(client, g_bload_buf_0234, 2);
 		if (ret < 0) {
 			dev_err(&client->dev, "Write Failed \n");
 			return -1;
 		}
 
 		/*   Wait for ACK or NACK */
-		ret = ar0521_read(client, g_bload_buf, 1);
+		ret = ar0234_read(client, g_bload_buf_0234, 1);
 		if (ret < 0) {
 			dev_err(&client->dev, "Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf[0] != RESP_ACK) {
+		if (g_bload_buf_0234[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev, " NACK Received... exiting.. \n");
 			return -1;
 		}
 
-		g_bload_buf[0] = (g_bload_flashaddr & 0xFF000000) >> 24;
-		g_bload_buf[1] = (g_bload_flashaddr & 0x00FF0000) >> 16;
-		g_bload_buf[2] = (g_bload_flashaddr & 0x0000FF00) >> 8;
-		g_bload_buf[3] = (g_bload_flashaddr & 0x000000FF);
-		g_bload_buf[4] = g_bload_buf[0] ^ g_bload_buf[1] ^
-				 g_bload_buf[2] ^ g_bload_buf[3];
+		g_bload_buf_0234[0] =
+			(g_bload_flashaddr_0234 & 0xFF000000) >> 24;
+		g_bload_buf_0234[1] =
+			(g_bload_flashaddr_0234 & 0x00FF0000) >> 16;
+		g_bload_buf_0234[2] =
+			(g_bload_flashaddr_0234 & 0x0000FF00) >> 8;
+		g_bload_buf_0234[3] = (g_bload_flashaddr_0234 & 0x000000FF);
+		g_bload_buf_0234[4] = g_bload_buf_0234[0] ^
+				      g_bload_buf_0234[1] ^
+				      g_bload_buf_0234[2] ^ g_bload_buf_0234[3];
 
-		ret = ar0521_write(client, g_bload_buf, 5);
+		ret = ar0234_write(client, g_bload_buf_0234, 5);
 		if (ret < 0) {
 			dev_err(&client->dev, "Write Failed \n");
 			return -1;
 		}
 
 		/*   Wait for ACK or NACK */
-		ret = ar0521_read(client, g_bload_buf, 1);
+		ret = ar0234_read(client, g_bload_buf_0234, 1);
 		if (ret < 0) {
 			dev_err(&client->dev, "Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf[0] != RESP_ACK) {
+		if (g_bload_buf_0234[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev, " NACK Received... exiting.. \n");
 			return -1;
 		}
 
-		g_bload_buf[0] = ihex_rec->datasize - 1;
-		checksum = g_bload_buf[0];
+		g_bload_buf_0234[0] = ihex_rec->datasize - 1;
+		checksum = g_bload_buf_0234[0];
 		for (i = 0; i < ihex_rec->datasize; i++) {
-			g_bload_buf[i + 1] = ihex_rec->recdata[i];
-			checksum ^= g_bload_buf[i + 1];
+			g_bload_buf_0234[i + 1] = ihex_rec->recdata[i];
+			checksum ^= g_bload_buf_0234[i + 1];
 		}
 
-		g_bload_buf[i + 1] = checksum;
+		g_bload_buf_0234[i + 1] = checksum;
 
-		ret = ar0521_write(client, g_bload_buf, i + 2);
+		ret = ar0234_write(client, g_bload_buf_0234, i + 2);
 		if (ret < 0) {
 			dev_err(&client->dev, "Write Failed \n");
 			return -1;
@@ -615,16 +618,16 @@ static int mcu_bload_parse_send_cmd(struct i2c_client *client,
 
 	poll_busy:
 		/*   Wait for ACK or NACK */
-		ret = ar0521_read(client, g_bload_buf, 1);
+		ret = ar0234_read(client, g_bload_buf_0234, 1);
 		if (ret < 0) {
 			dev_err(&client->dev, "Read Failed \n");
 			return -1;
 		}
 
-		if (g_bload_buf[0] == RESP_BUSY)
+		if (g_bload_buf_0234[0] == RESP_BUSY)
 			goto poll_busy;
 
-		if (g_bload_buf[0] != RESP_ACK) {
+		if (g_bload_buf_0234[0] != RESP_ACK) {
 			/*   NACK Received */
 			dev_err(&client->dev, " NACK Received... exiting.. \n");
 			return -1;
@@ -648,16 +651,16 @@ static int mcu_bload_parse_send_cmd(struct i2c_client *client,
 static int mcu_bload_update_fw(struct i2c_client *client)
 {
 	/* exclude NULL character at end of string */
-	unsigned long hex_file_size = ARRAY_SIZE(g_mcu_fw_buf) - 1;
+	unsigned long hex_file_size = ARRAY_SIZE(g_mcu_fw_buf_ar0234) - 1;
 	unsigned char wbuf[MAX_BUF_LEN];
 	int i = 0, recindex = 0, ret = 0;
 
 	for (i = 0; i < hex_file_size; i++) {
-		if ((recindex == 0) && (g_mcu_fw_buf[i] == ':')) {
+		if ((recindex == 0) && (g_mcu_fw_buf_ar0234[i] == ':')) {
 			/*  pr_info("Start of a Record \n"); */
-		} else if (g_mcu_fw_buf[i] == CR) {
+		} else if (g_mcu_fw_buf_ar0234[i] == CR) {
 			/*   No Implementation */
-		} else if (g_mcu_fw_buf[i] == LF) {
+		} else if (g_mcu_fw_buf_ar0234[i] == LF) {
 			if (recindex == 0) {
 				/*   Parsing Complete */
 				break;
@@ -675,20 +678,22 @@ static int mcu_bload_update_fw(struct i2c_client *client)
 
 		} else {
 			/*   Parse Rec Data */
-			if ((ret = mcu_bload_ascii2hex(g_mcu_fw_buf[i])) < 0) {
+			if ((ret = mcu_bload_ascii2hex(
+				     g_mcu_fw_buf_ar0234[i])) < 0) {
 				dev_err(&client->dev,
 					"Invalid Character - 0x%02x !! \n",
-					g_mcu_fw_buf[i]);
+					g_mcu_fw_buf_ar0234[i]);
 				break;
 			}
 
 			wbuf[recindex] = (0xF0 & (ret << 4));
 			i++;
 
-			if ((ret = mcu_bload_ascii2hex(g_mcu_fw_buf[i])) < 0) {
+			if ((ret = mcu_bload_ascii2hex(
+				     g_mcu_fw_buf_ar0234[i])) < 0) {
 				dev_err(&client->dev,
 					"Invalid Character - 0x%02x !!!! \n",
-					g_mcu_fw_buf[i]);
+					g_mcu_fw_buf_ar0234[i]);
 				break;
 			}
 
@@ -697,8 +702,9 @@ static int mcu_bload_update_fw(struct i2c_client *client)
 		}
 	}
 
-#ifdef AR0521_DEBUG
-	pr_info("Program FLASH Success !! - CRC = 0x%04x \n", g_bload_crc16);
+#ifdef AR0234_DEBUG
+	pr_info("Program FLASH Success !! - CRC = 0x%04x \n",
+		g_bload_crc16_ar0234);
 #endif
 
 	/* ------------ PROGRAM FLASH END ----------------------- */
@@ -707,82 +713,82 @@ static int mcu_bload_update_fw(struct i2c_client *client)
 }
 
 static int mcu_bload_read(struct i2c_client *client,
-			  unsigned int g_bload_flashaddr, char *bytearray,
+			  unsigned int g_bload_flashaddr_0234, char *bytearray,
 			  unsigned int len)
 {
 	int ret = 0;
 
-	g_bload_buf[0] = BL_READ_MEM;
-	g_bload_buf[1] = ~(BL_READ_MEM);
+	g_bload_buf_0234[0] = BL_READ_MEM;
+	g_bload_buf_0234[1] = ~(BL_READ_MEM);
 
-	ret = ar0521_write(client, g_bload_buf, 2);
+	ret = ar0234_write(client, g_bload_buf_0234, 2);
 	if (ret < 0) {
 		dev_err(&client->dev, "Write Failed \n");
 		return -1;
 	}
 
 	/*   Wait for ACK or NACK */
-	ret = ar0521_read(client, g_bload_buf, 1);
+	ret = ar0234_read(client, g_bload_buf_0234, 1);
 	if (ret < 0) {
 		dev_err(&client->dev, "Read Failed \n");
 		return -1;
 	}
 
-	if (g_bload_buf[0] != RESP_ACK) {
+	if (g_bload_buf_0234[0] != RESP_ACK) {
 		/*   NACK Received */
 		dev_err(&client->dev, " NACK Received... exiting.. \n");
 		return -1;
 	}
 
-	g_bload_buf[0] = (g_bload_flashaddr & 0xFF000000) >> 24;
-	g_bload_buf[1] = (g_bload_flashaddr & 0x00FF0000) >> 16;
-	g_bload_buf[2] = (g_bload_flashaddr & 0x0000FF00) >> 8;
-	g_bload_buf[3] = (g_bload_flashaddr & 0x000000FF);
-	g_bload_buf[4] = g_bload_buf[0] ^ g_bload_buf[1] ^ g_bload_buf[2] ^
-			 g_bload_buf[3];
+	g_bload_buf_0234[0] = (g_bload_flashaddr_0234 & 0xFF000000) >> 24;
+	g_bload_buf_0234[1] = (g_bload_flashaddr_0234 & 0x00FF0000) >> 16;
+	g_bload_buf_0234[2] = (g_bload_flashaddr_0234 & 0x0000FF00) >> 8;
+	g_bload_buf_0234[3] = (g_bload_flashaddr_0234 & 0x000000FF);
+	g_bload_buf_0234[4] = g_bload_buf_0234[0] ^ g_bload_buf_0234[1] ^
+			      g_bload_buf_0234[2] ^ g_bload_buf_0234[3];
 
-	ret = ar0521_write(client, g_bload_buf, 5);
+	ret = ar0234_write(client, g_bload_buf_0234, 5);
 	if (ret < 0) {
 		dev_err(&client->dev, "Write Failed \n");
 		return -1;
 	}
 
 	/*   Wait for ACK or NACK */
-	ret = ar0521_read(client, g_bload_buf, 1);
+	ret = ar0234_read(client, g_bload_buf_0234, 1);
 	if (ret < 0) {
 		dev_err(&client->dev, "Read Failed \n");
 		return -1;
 	}
 
-	if (g_bload_buf[0] != RESP_ACK) {
+	if (g_bload_buf_0234[0] != RESP_ACK) {
 		/*   NACK Received */
 		dev_err(&client->dev, " NACK Received... exiting.. \n");
 		return -1;
 	}
 
-	g_bload_buf[0] = len - 1;
-	g_bload_buf[1] = ~(len - 1);
+	g_bload_buf_0234[0] = len - 1;
+	g_bload_buf_0234[1] = ~(len - 1);
 
-	ret = ar0521_write(client, g_bload_buf, 2);
+	ret = ar0234_write(client, g_bload_buf_0234, 2);
 	if (ret < 0) {
 		dev_err(&client->dev, "Write Failed \n");
 		return -1;
 	}
 
 	/*   Wait for ACK or NACK */
-	ret = ar0521_read(client, g_bload_buf, 1);
+	ret = ar0234_read(client, g_bload_buf_0234, 1);
 	if (ret < 0) {
 		dev_err(&client->dev, "Read Failed \n");
 		return -1;
 	}
 
-	if (g_bload_buf[0] != RESP_ACK) {
+	if (g_bload_buf_0234[0] != RESP_ACK) {
 		/*   NACK Received */
 		dev_err(&client->dev, " NACK Received... exiting.. \n");
 		return -1;
 	}
 
-	ret = ar0521_read(client, bytearray, len);
+	ret = ar0234_read(client, bytearray, len);
 	if (ret < 0) {
 		dev_err(&client->dev, "Read Failed \n");
 		return -1;
@@ -829,7 +835,7 @@ static int mcu_bload_verify_flash(struct i2c_client *client,
 			orig_crc, calc_crc);
 	}
 
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 	pr_info(" CRC Verification Success 0x%04x == 0x%04x \n", orig_crc,
 		calc_crc);
 #endif
@@ -841,42 +847,42 @@ static int mcu_bload_go(struct i2c_client *client)
 {
 	int ret = 0;
 
-	g_bload_buf[0] = BL_GO;
-	g_bload_buf[1] = ~(BL_GO);
+	g_bload_buf_0234[0] = BL_GO;
+	g_bload_buf_0234[1] = ~(BL_GO);
 
-	ret = ar0521_write(client, g_bload_buf, 2);
+	ret = ar0234_write(client, g_bload_buf_0234, 2);
 	if (ret < 0) {
 		dev_err(&client->dev, "Write Failed \n");
 		return -1;
 	}
 
-	ret = ar0521_read(client, g_bload_buf, 1);
+	ret = ar0234_read(client, g_bload_buf_0234, 1);
 	if (ret < 0) {
 		dev_err(&client->dev, "Failed Read 1 \n");
 		return -1;
 	}
 
 	/*   Start Address */
-	g_bload_buf[0] = (FLASH_START_ADDRESS & 0xFF000000) >> 24;
-	g_bload_buf[1] = (FLASH_START_ADDRESS & 0x00FF0000) >> 16;
-	g_bload_buf[2] = (FLASH_START_ADDRESS & 0x0000FF00) >> 8;
-	g_bload_buf[3] = (FLASH_START_ADDRESS & 0x000000FF);
-	g_bload_buf[4] = g_bload_buf[0] ^ g_bload_buf[1] ^ g_bload_buf[2] ^
-			 g_bload_buf[3];
+	g_bload_buf_0234[0] = (FLASH_START_ADDRESS & 0xFF000000) >> 24;
+	g_bload_buf_0234[1] = (FLASH_START_ADDRESS & 0x00FF0000) >> 16;
+	g_bload_buf_0234[2] = (FLASH_START_ADDRESS & 0x0000FF00) >> 8;
+	g_bload_buf_0234[3] = (FLASH_START_ADDRESS & 0x000000FF);
+	g_bload_buf_0234[4] = g_bload_buf_0234[0] ^ g_bload_buf_0234[1] ^
+			      g_bload_buf_0234[2] ^ g_bload_buf_0234[3];
 
-	ret = ar0521_write(client, g_bload_buf, 5);
+	ret = ar0234_write(client, g_bload_buf_0234, 5);
 	if (ret < 0) {
 		dev_err(&client->dev, "Write Failed \n");
 		return -1;
 	}
 
-	ret = ar0521_read(client, g_bload_buf, 1);
+	ret = ar0234_read(client, g_bload_buf_0234, 1);
 	if (ret < 0) {
 		dev_err(&client->dev, "Failed Read 1 \n");
 		return -1;
 	}
 
-	if (g_bload_buf[0] != RESP_ACK) {
+	if (g_bload_buf_0234[0] != RESP_ACK) {
 		/*   NACK Received */
 		dev_err(&client->dev, " NACK Received... exiting.. \n");
 		return -1;
@@ -889,7 +895,7 @@ static int mcu_fw_update(struct i2c_client *client,
 			 unsigned char *mcu_fw_version)
 {
 	int ret = 0;
-	g_bload_crc16 = 0;
+	g_bload_crc16_ar0234 = 0;
 
 	/*
 	 * TODO: Is this necessary? It seems redundant as it's already called before
@@ -902,7 +908,7 @@ static int mcu_fw_update(struct i2c_client *client,
 		goto exit;
 	}
 
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 	pr_info(" Get Version SUCCESS !! \n");
 #endif
 
@@ -913,7 +919,7 @@ static int mcu_fw_update(struct i2c_client *client,
 		goto exit;
 	}
 
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 	pr_info("Erase Flash Success !! \n");
 #endif
 
@@ -924,7 +930,7 @@ static int mcu_fw_update(struct i2c_client *client,
 	}
 
 	/* Verify the checksum for the update firmware */
-	if ((ret = mcu_bload_verify_flash(client, g_bload_crc16)) < 0) {
+	if ((ret = mcu_bload_verify_flash(client, g_bload_crc16_ar0234)) < 0) {
 		dev_err(&client->dev, " verify_flash FAIL !! \n");
 		goto exit;
 	}
@@ -937,7 +943,7 @@ static int mcu_fw_update(struct i2c_client *client,
 	}
 
 	if (mcu_fw_version) {
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 		pr_info("(%s) - Firmware Updated - (%.32s)\n", __func__,
 			mcu_fw_version);
 #endif
@@ -955,27 +961,27 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 	int ret = 0, err = 0;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 
 	/* Array of Ctrl Info */
 	while (1) {
 		/* First Txn Payload length = 0 */
 		payload_len = 2;
 
-		mc_data[0] = CMD_SIGNATURE;
-		mc_data[1] = CMD_ID_GET_CTRL_INFO;
-		mc_data[2] = payload_len >> 8;
-		mc_data[3] = payload_len & 0xFF;
-		mc_data[4] = errorcheck(&mc_data[2], 2);
+		mc_data_0234[0] = CMD_SIGNATURE;
+		mc_data_0234[1] = CMD_ID_GET_CTRL_INFO;
+		mc_data_0234[2] = payload_len >> 8;
+		mc_data_0234[3] = payload_len & 0xFF;
+		mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-		ar0521_write(client, mc_data, TX_LEN_PKT);
+		ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-		mc_data[0] = CMD_SIGNATURE;
-		mc_data[1] = CMD_ID_GET_CTRL_INFO;
-		mc_data[2] = index >> 8;
-		mc_data[3] = index & 0xFF;
-		mc_data[4] = errorcheck(&mc_data[2], 2);
-		err = ar0521_write(client, mc_data, 5);
+		mc_data_0234[0] = CMD_SIGNATURE;
+		mc_data_0234[1] = CMD_ID_GET_CTRL_INFO;
+		mc_data_0234[2] = index >> 8;
+		mc_data_0234[3] = index & 0xFF;
+		mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
+		err = ar0234_write(client, mc_data_0234, 5);
 		if (err != 0) {
 			dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 				__LINE__, err);
@@ -983,7 +989,7 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 			goto exit;
 		}
 
-		err = ar0521_read(client, mc_ret_data, RX_LEN_PKT);
+		err = ar0234_read(client, mc_ret_data_0234, RX_LEN_PKT);
 		if (err != 0) {
 			dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 				__LINE__, err);
@@ -992,8 +998,8 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 		}
 
 		/* Verify CRC */
-		orig_crc = mc_ret_data[4];
-		calc_crc = errorcheck(&mc_ret_data[2], 2);
+		orig_crc = mc_ret_data_0234[4];
+		calc_crc = errorcheck(&mc_ret_data_0234[2], 2);
 		if (orig_crc != calc_crc) {
 			dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
 				__func__, __LINE__, orig_crc, calc_crc);
@@ -1001,14 +1007,15 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 			goto exit;
 		}
 
-		if (((mc_ret_data[2] << 8) | mc_ret_data[3]) == 0) {
+		if (((mc_ret_data_0234[2] << 8) | mc_ret_data_0234[3]) == 0) {
 			*numctrls = index;
 			break;
 		}
 
-		payload_len = ((mc_ret_data[2] << 8) | mc_ret_data[3]) +
-			      HEADER_FOOTER_SIZE;
-		errcode = mc_ret_data[5];
+		payload_len =
+			((mc_ret_data_0234[2] << 8) | mc_ret_data_0234[3]) +
+			HEADER_FOOTER_SIZE;
+		errcode = mc_ret_data_0234[5];
 		if (errcode != ERRCODE_SUCCESS) {
 			dev_err(&client->dev, " %s(%d) Errcode - 0x%02x \n",
 				__func__, __LINE__, errcode);
@@ -1016,8 +1023,8 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 			goto exit;
 		}
 
-		memset(mc_ret_data, 0x00, payload_len);
-		err = ar0521_read(client, mc_ret_data, payload_len);
+		memset(mc_ret_data_0234, 0x00, payload_len);
+		err = ar0234_read(client, mc_ret_data_0234, payload_len);
 		if (err != 0) {
 			dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 				__LINE__, err);
@@ -1026,8 +1033,8 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 		}
 
 		/* Verify CRC */
-		orig_crc = mc_ret_data[payload_len - 2];
-		calc_crc = errorcheck(&mc_ret_data[2],
+		orig_crc = mc_ret_data_0234[payload_len - 2];
+		calc_crc = errorcheck(&mc_ret_data_0234[2],
 				      payload_len - HEADER_FOOTER_SIZE);
 		if (orig_crc != calc_crc) {
 			dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
@@ -1037,7 +1044,7 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 		}
 
 		/* Verify Errcode */
-		errcode = mc_ret_data[payload_len - 1];
+		errcode = mc_ret_data_0234[payload_len - 1];
 		if (errcode != ERRCODE_SUCCESS) {
 			dev_err(&client->dev, " %s(%d) Errcode - 0x%02x \n",
 				__func__, __LINE__, errcode);
@@ -1050,31 +1057,36 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 
 			/* append ctrl info in array */
 			mcu_cam_ctrl[index].ctrl_id =
-				mc_ret_data[2] << 24 | mc_ret_data[3] << 16 |
-				mc_ret_data[4] << 8 | mc_ret_data[5];
-			mcu_cam_ctrl[index].ctrl_type = mc_ret_data[6];
+				mc_ret_data_0234[2] << 24 |
+				mc_ret_data_0234[3] << 16 |
+				mc_ret_data_0234[4] << 8 | mc_ret_data_0234[5];
+			mcu_cam_ctrl[index].ctrl_type = mc_ret_data_0234[6];
 
 			switch (mcu_cam_ctrl[index].ctrl_type) {
 			case CTRL_STANDARD:
 				mcu_cam_ctrl[index].ctrl_data.std.ctrl_min =
-					mc_ret_data[7] << 24 |
-					mc_ret_data[8] << 16 |
-					mc_ret_data[9] << 8 | mc_ret_data[10];
+					mc_ret_data_0234[7] << 24 |
+					mc_ret_data_0234[8] << 16 |
+					mc_ret_data_0234[9] << 8 |
+					mc_ret_data_0234[10];
 
 				mcu_cam_ctrl[index].ctrl_data.std.ctrl_max =
-					mc_ret_data[11] << 24 |
-					mc_ret_data[12] << 16 |
-					mc_ret_data[13] << 8 | mc_ret_data[14];
+					mc_ret_data_0234[11] << 24 |
+					mc_ret_data_0234[12] << 16 |
+					mc_ret_data_0234[13] << 8 |
+					mc_ret_data_0234[14];
 
 				mcu_cam_ctrl[index].ctrl_data.std.ctrl_def =
-					mc_ret_data[15] << 24 |
-					mc_ret_data[16] << 16 |
-					mc_ret_data[17] << 8 | mc_ret_data[18];
+					mc_ret_data_0234[15] << 24 |
+					mc_ret_data_0234[16] << 16 |
+					mc_ret_data_0234[17] << 8 |
+					mc_ret_data_0234[18];
 
 				mcu_cam_ctrl[index].ctrl_data.std.ctrl_step =
-					mc_ret_data[19] << 24 |
-					mc_ret_data[20] << 16 |
-					mc_ret_data[21] << 8 | mc_ret_data[22];
+					mc_ret_data_0234[19] << 24 |
+					mc_ret_data_0234[20] << 16 |
+					mc_ret_data_0234[21] << 8 |
+					mc_ret_data_0234[22];
 
 				mcu_cam_ctrl[index].mcu_ctrl_index = index;
 				break;
@@ -1084,7 +1096,7 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 				break;
 			}
 
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 			pr_info("Control: ID: 0x%x; Type: %u; min: %d; Max: %d; Def: %d; Step: %u\n",
 				mcu_cam_ctrl[index].ctrl_id,
 				mcu_cam_ctrl[index].ctrl_type,
@@ -1133,7 +1145,7 @@ static int mcu_count_or_list_ctrls(struct i2c_client *client,
 
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 
 	return ret;
 }
@@ -1151,28 +1163,28 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 	/* Stream Info Variables */
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 
-	/* List all formats from MCU and append to mcu_ar0521_frmfmt array */
+	/* List all formats from MCU and append to mcu_ar0234_frmfmt array */
 
 	for (index = 0;; index++) {
 		/* First Txn Payload length = 0 */
 		payload_len = 2;
 
-		mc_data[0] = CMD_SIGNATURE;
-		mc_data[1] = CMD_ID_GET_STREAM_INFO;
-		mc_data[2] = payload_len >> 8;
-		mc_data[3] = payload_len & 0xFF;
-		mc_data[4] = errorcheck(&mc_data[2], 2);
+		mc_data_0234[0] = CMD_SIGNATURE;
+		mc_data_0234[1] = CMD_ID_GET_STREAM_INFO;
+		mc_data_0234[2] = payload_len >> 8;
+		mc_data_0234[3] = payload_len & 0xFF;
+		mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-		ar0521_write(client, mc_data, TX_LEN_PKT);
+		ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-		mc_data[0] = CMD_SIGNATURE;
-		mc_data[1] = CMD_ID_GET_STREAM_INFO;
-		mc_data[2] = index >> 8;
-		mc_data[3] = index & 0xFF;
-		mc_data[4] = errorcheck(&mc_data[2], 2);
-		err = ar0521_write(client, mc_data, 5);
+		mc_data_0234[0] = CMD_SIGNATURE;
+		mc_data_0234[1] = CMD_ID_GET_STREAM_INFO;
+		mc_data_0234[2] = index >> 8;
+		mc_data_0234[3] = index & 0xFF;
+		mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
+		err = ar0234_write(client, mc_data_0234, 5);
 		if (err != 0) {
 			dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 				__LINE__, err);
@@ -1180,7 +1192,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 			goto exit;
 		}
 
-		err = ar0521_read(client, mc_ret_data, RX_LEN_PKT);
+		err = ar0234_read(client, mc_ret_data_0234, RX_LEN_PKT);
 		if (err != 0) {
 			dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 				__LINE__, err);
@@ -1189,8 +1201,8 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 		}
 
 		/* Verify CRC */
-		orig_crc = mc_ret_data[4];
-		calc_crc = errorcheck(&mc_ret_data[2], 2);
+		orig_crc = mc_ret_data_0234[4];
+		calc_crc = errorcheck(&mc_ret_data_0234[2], 2);
 		if (orig_crc != calc_crc) {
 			dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
 				__func__, __LINE__, orig_crc, calc_crc);
@@ -1198,7 +1210,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 			goto exit;
 		}
 
-		if (((mc_ret_data[2] << 8) | mc_ret_data[3]) == 0) {
+		if (((mc_ret_data_0234[2] << 8) | mc_ret_data_0234[3]) == 0) {
 			if (stream_info == NULL) {
 				*frm_fmt_size = index;
 			} else {
@@ -1207,9 +1219,10 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 			break;
 		}
 
-		payload_len = ((mc_ret_data[2] << 8) | mc_ret_data[3]) +
-			      HEADER_FOOTER_SIZE;
-		errcode = mc_ret_data[5];
+		payload_len =
+			((mc_ret_data_0234[2] << 8) | mc_ret_data_0234[3]) +
+			HEADER_FOOTER_SIZE;
+		errcode = mc_ret_data_0234[5];
 		if (errcode != ERRCODE_SUCCESS) {
 			dev_err(&client->dev, " %s(%d) Errcode - 0x%02x \n",
 				__func__, __LINE__, errcode);
@@ -1217,8 +1230,8 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 			goto exit;
 		}
 
-		memset(mc_ret_data, 0x00, payload_len);
-		err = ar0521_read(client, mc_ret_data, payload_len);
+		memset(mc_ret_data_0234, 0x00, payload_len);
+		err = ar0234_read(client, mc_ret_data_0234, payload_len);
 		if (err != 0) {
 			dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 				__LINE__, err);
@@ -1227,8 +1240,8 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 		}
 
 		/* Verify CRC */
-		orig_crc = mc_ret_data[payload_len - 2];
-		calc_crc = errorcheck(&mc_ret_data[2],
+		orig_crc = mc_ret_data_0234[payload_len - 2];
+		calc_crc = errorcheck(&mc_ret_data_0234[2],
 				      payload_len - HEADER_FOOTER_SIZE);
 		if (orig_crc != calc_crc) {
 			dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
@@ -1238,7 +1251,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 		}
 
 		/* Verify Errcode */
-		errcode = mc_ret_data[payload_len - 1];
+		errcode = mc_ret_data_0234[payload_len - 1];
 		if (errcode != ERRCODE_SUCCESS) {
 			dev_err(&client->dev, " %s(%d) Errcode - 0x%02x \n",
 				__func__, __LINE__, errcode);
@@ -1246,22 +1259,25 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 			goto exit;
 		}
 		if (stream_info != NULL) {
-			stream_info->fmt_fourcc =
-				mc_ret_data[2] << 24 | mc_ret_data[3] << 16 |
-				mc_ret_data[4] << 8 | mc_ret_data[5];
+			stream_info->fmt_fourcc = mc_ret_data_0234[2] << 24 |
+						  mc_ret_data_0234[3] << 16 |
+						  mc_ret_data_0234[4] << 8 |
+						  mc_ret_data_0234[5];
 			stream_info->width =
-				mc_ret_data[6] << 8 | mc_ret_data[7];
+				mc_ret_data_0234[6] << 8 | mc_ret_data_0234[7];
 			stream_info->height =
-				mc_ret_data[8] << 8 | mc_ret_data[9];
-			stream_info->frame_rate_type = mc_ret_data[10];
+				mc_ret_data_0234[8] << 8 | mc_ret_data_0234[9];
+			stream_info->frame_rate_type = mc_ret_data_0234[10];
 
 			switch (stream_info->frame_rate_type) {
 			case FRAME_RATE_DISCRETE:
 				stream_info->frame_rate.disc.frame_rate_num =
-					mc_ret_data[11] << 8 | mc_ret_data[12];
+					mc_ret_data_0234[11] << 8 |
+					mc_ret_data_0234[12];
 
 				stream_info->frame_rate.disc.frame_rate_denom =
-					mc_ret_data[13] << 8 | mc_ret_data[14];
+					mc_ret_data_0234[13] << 8 |
+					mc_ret_data_0234[14];
 
 				break;
 
@@ -1280,21 +1296,21 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 			 * is UYVY. We swap it to YUYV only making changes in the platform driver.
 			 */
 			case V4L2_PIX_FMT_UYVY:
-				/* ar0521_codes is already populated with V4L2_PIX_FMT_YUYV */
+				/* ar0234_codes is already populated with V4L2_PIX_FMT_YUYV */
 				/* check if width and height are already in array - update frame rate only */
 				for (loop = 0; loop < (mode); loop++) {
-					if ((ar0521_data.mcu_cam_frmfmt[loop]
+					if ((ar0234_data.mcu_cam_frmfmt[loop]
 						     .size.width ==
 					     stream_info->width) &&
-					    (ar0521_data.mcu_cam_frmfmt[loop]
+					    (ar0234_data.mcu_cam_frmfmt[loop]
 						     .size.height ==
 					     stream_info->height)) {
 						num_frates =
-							ar0521_data
+							ar0234_data
 								.mcu_cam_frmfmt
 									[loop]
 								.num_framerates;
-						*((int *)(ar0521_data
+						*((int *)(ar0234_data
 								  .mcu_cam_frmfmt
 									  [loop]
 								  .framerates) +
@@ -1308,7 +1324,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 								      .disc
 								      .frame_rate_denom);
 
-						ar0521_data.mcu_cam_frmfmt[loop]
+						ar0234_data.mcu_cam_frmfmt[loop]
 							.num_framerates++;
 
 						streamdb[index] = loop;
@@ -1322,27 +1338,27 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 					continue;
 				}
 
-				/* Add Width, Height, Frame Rate array, Mode into mcu_ar0521_frmfmt array */
-				ar0521_data.mcu_cam_frmfmt[mode].size.width =
+				/* Add Width, Height, Frame Rate array, Mode into mcu_ar0234_frmfmt array */
+				ar0234_data.mcu_cam_frmfmt[mode].size.width =
 					stream_info->width;
-				ar0521_data.mcu_cam_frmfmt[mode].size.height =
+				ar0234_data.mcu_cam_frmfmt[mode].size.height =
 					stream_info->height;
 
-				num_frates = ar0521_data.mcu_cam_frmfmt[mode]
+				num_frates = ar0234_data.mcu_cam_frmfmt[mode]
 						     .num_framerates;
 
-				*(ar0521_data.mcu_cam_frmfmt[mode].framerates +
+				*(ar0234_data.mcu_cam_frmfmt[mode].framerates +
 				  num_frates) =
 					(int)(stream_info->frame_rate.disc
 						      .frame_rate_num /
 					      stream_info->frame_rate.disc
 						      .frame_rate_denom);
 
-				ar0521_data.mcu_cam_frmfmt[mode]
+				ar0234_data.mcu_cam_frmfmt[mode]
 					.num_framerates++;
 
-				ar0521_data.mcu_cam_frmfmt[mode].mode = mode;
-				ar0521_data.mcu_cam_frmfmt[mode].mode = mode;
+				ar0234_data.mcu_cam_frmfmt[mode].mode = mode;
+				ar0234_data.mcu_cam_frmfmt[mode].mode = mode;
 				streamdb[index] = mode;
 				mode++;
 				break;
@@ -1358,7 +1374,7 @@ static int mcu_count_or_list_fmts(struct i2c_client *client,
 
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 
 	return ret;
 }
@@ -1399,17 +1415,17 @@ static int mcu_data_init(struct device *dev, int frm_fmt_size)
 		return -ENOMEM;
 	}
 
-	ar0521_data.mcu_cam_frmfmt = devm_kzalloc(
+	ar0234_data.mcu_cam_frmfmt = devm_kzalloc(
 		dev, sizeof(struct mcu_frmfmt) * (frm_fmt_size), GFP_KERNEL);
-	if (!ar0521_data.mcu_cam_frmfmt) {
+	if (!ar0234_data.mcu_cam_frmfmt) {
 		dev_err(dev, "Unable to allocate memory \n");
 		return -ENOMEM;
 	}
 
 	for (; loop < frm_fmt_size; loop++) {
-		ar0521_data.mcu_cam_frmfmt[loop].framerates = devm_kzalloc(
+		ar0234_data.mcu_cam_frmfmt[loop].framerates = devm_kzalloc(
 			dev, sizeof(int) * MAX_NUM_FRATES, GFP_KERNEL);
-		if (!ar0521_data.mcu_cam_frmfmt[loop].framerates) {
+		if (!ar0234_data.mcu_cam_frmfmt[loop].framerates) {
 			dev_err(dev, "Unable to allocate memory \n");
 			return -ENOMEM;
 		}
@@ -1426,24 +1442,24 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t *sensor_id)
 	int ret = 0, err = 0;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 
 	/* Read the version info. from Micro controller */
 
 	/* First Txn Payload length = 0 */
 	payload_len = 0;
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_GET_SENSOR_ID;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_GET_SENSOR_ID;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	ar0521_write(client, mc_data, TX_LEN_PKT);
+	ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_GET_SENSOR_ID;
-	err = ar0521_write(client, mc_data, 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_GET_SENSOR_ID;
+	err = ar0234_write(client, mc_data_0234, 2);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -1451,7 +1467,7 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t *sensor_id)
 		goto exit;
 	}
 
-	err = ar0521_read(client, mc_ret_data, RX_LEN_PKT);
+	err = ar0234_read(client, mc_ret_data_0234, RX_LEN_PKT);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -1460,8 +1476,8 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t *sensor_id)
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data[4];
-	calc_crc = errorcheck(&mc_ret_data[2], 2);
+	orig_crc = mc_ret_data_0234[4];
+	calc_crc = errorcheck(&mc_ret_data_0234[2], 2);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
 			__func__, __LINE__, orig_crc, calc_crc);
@@ -1469,7 +1485,7 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t *sensor_id)
 		goto exit;
 	}
 
-	errcode = mc_ret_data[5];
+	errcode = mc_ret_data_0234[5];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev, " %s(%d) Errcode - 0x%02x \n", __func__,
 			__LINE__, errcode);
@@ -1477,11 +1493,11 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t *sensor_id)
 		goto exit;
 	}
 
-	payload_len =
-		((mc_ret_data[2] << 8) | mc_ret_data[3]) + HEADER_FOOTER_SIZE;
+	payload_len = ((mc_ret_data_0234[2] << 8) | mc_ret_data_0234[3]) +
+		      HEADER_FOOTER_SIZE;
 
-	memset(mc_ret_data, 0x00, payload_len);
-	err = ar0521_read(client, mc_ret_data, payload_len);
+	memset(mc_ret_data_0234, 0x00, payload_len);
+	err = ar0234_read(client, mc_ret_data_0234, payload_len);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -1490,8 +1506,8 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t *sensor_id)
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data[payload_len - 2];
-	calc_crc = errorcheck(&mc_ret_data[2], 2);
+	orig_crc = mc_ret_data_0234[payload_len - 2];
+	calc_crc = errorcheck(&mc_ret_data_0234[2], 2);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
 			__func__, __LINE__, orig_crc, calc_crc);
@@ -1500,7 +1516,7 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t *sensor_id)
 	}
 
 	/* Verify Errcode */
-	errcode = mc_ret_data[payload_len - 1];
+	errcode = mc_ret_data_0234[payload_len - 1];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev, " %s(%d) Errcode - 0x%02x \n", __func__,
 			__LINE__, errcode);
@@ -1508,11 +1524,11 @@ static int mcu_get_sensor_id(struct i2c_client *client, uint16_t *sensor_id)
 		goto exit;
 	}
 
-	*sensor_id = mc_ret_data[2] << 8 | mc_ret_data[3];
+	*sensor_id = mc_ret_data_0234[2] << 8 | mc_ret_data_0234[3];
 
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 
 	return ret;
 }
@@ -1529,18 +1545,18 @@ static int mcu_get_cmd_status(struct i2c_client *client, uint8_t *cmd_id,
 	/* First Txn Payload length = 0 */
 	payload_len = 1;
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_GET_STATUS;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_GET_STATUS;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	ar0521_write(client, mc_data, TX_LEN_PKT);
+	ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_GET_STATUS;
-	mc_data[2] = *cmd_id;
-	err = ar0521_write(client, mc_data, 3);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_GET_STATUS;
+	mc_data_0234[2] = *cmd_id;
+	err = ar0234_write(client, mc_data_0234, 3);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -1548,8 +1564,8 @@ static int mcu_get_cmd_status(struct i2c_client *client, uint8_t *cmd_id,
 	}
 
 	payload_len = CMD_STATUS_MSG_LEN;
-	memset(mc_ret_data, 0x00, payload_len);
-	err = ar0521_read(client, mc_ret_data, payload_len);
+	memset(mc_ret_data_0234, 0x00, payload_len);
+	err = ar0234_read(client, mc_ret_data_0234, payload_len);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -1557,17 +1573,17 @@ static int mcu_get_cmd_status(struct i2c_client *client, uint8_t *cmd_id,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data[payload_len - 2];
-	calc_crc = errorcheck(&mc_ret_data[2], 3);
+	orig_crc = mc_ret_data_0234[payload_len - 2];
+	calc_crc = errorcheck(&mc_ret_data_0234[2], 3);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
 			__func__, __LINE__, orig_crc, calc_crc);
 		return -EINVAL;
 	}
 
-	*cmd_id = mc_ret_data[2];
-	*cmd_status = mc_ret_data[3] << 8 | mc_ret_data[4];
-	*ret_code = mc_ret_data[payload_len - 1];
+	*cmd_id = mc_ret_data_0234[2];
+	*cmd_status = mc_ret_data_0234[3] << 8 | mc_ret_data_0234[4];
+	*ret_code = mc_ret_data_0234[payload_len - 1];
 
 	return 0;
 }
@@ -1589,7 +1605,7 @@ static int mcu_isp_init(struct i2c_client *client)
 
 	if ((cmd_status == MCU_CMD_STATUS_SUCCESS) &&
 	    (retcode == ERRCODE_SUCCESS)) {
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 		pr_info(" Already Initialized !! \n");
 #endif
 
@@ -1601,17 +1617,17 @@ static int mcu_isp_init(struct i2c_client *client)
 	/* First Txn Payload length = 0 */
 	payload_len = 0;
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_INIT_CAM;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_INIT_CAM;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	ar0521_write(client, mc_data, TX_LEN_PKT);
+	ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_INIT_CAM;
-	err = ar0521_write(client, mc_data, 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_INIT_CAM;
+	err = ar0234_write(client, mc_data_0234, 2);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -1633,7 +1649,7 @@ static int mcu_isp_init(struct i2c_client *client)
 		if ((cmd_status == MCU_CMD_STATUS_SUCCESS) &&
 		    ((retcode == ERRCODE_SUCCESS) ||
 		     (retcode == ERRCODE_ALREADY))) {
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 			pr_info(" ISP Already Initialized !! \n");
 #endif
 
@@ -1660,25 +1676,25 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 	int ret = 0, i = 0, err = 0;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 
 	/* First Txn Payload length = 0 */
 	payload_len = 2;
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_GET_CTRL_UI_INFO;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_GET_CTRL_UI_INFO;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	ar0521_write(client, mc_data, TX_LEN_PKT);
+	ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_GET_CTRL_UI_INFO;
-	mc_data[2] = index >> 8;
-	mc_data[3] = index & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
-	err = ar0521_write(client, mc_data, 5);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_GET_CTRL_UI_INFO;
+	mc_data_0234[2] = index >> 8;
+	mc_data_0234[3] = index & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
+	err = ar0234_write(client, mc_data_0234, 5);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -1686,7 +1702,7 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 		goto exit;
 	}
 
-	err = ar0521_read(client, mc_ret_data, RX_LEN_PKT);
+	err = ar0234_read(client, mc_ret_data_0234, RX_LEN_PKT);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -1695,8 +1711,8 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data[4];
-	calc_crc = errorcheck(&mc_ret_data[2], 2);
+	orig_crc = mc_ret_data_0234[4];
+	calc_crc = errorcheck(&mc_ret_data_0234[2], 2);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
 			__func__, __LINE__, orig_crc, calc_crc);
@@ -1704,9 +1720,9 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 		goto exit;
 	}
 
-	payload_len =
-		((mc_ret_data[2] << 8) | mc_ret_data[3]) + HEADER_FOOTER_SIZE;
-	errcode = mc_ret_data[5];
+	payload_len = ((mc_ret_data_0234[2] << 8) | mc_ret_data_0234[3]) +
+		      HEADER_FOOTER_SIZE;
+	errcode = mc_ret_data_0234[5];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev, " %s(%d) Errcode - 0x%02x \n", __func__,
 			__LINE__, errcode);
@@ -1714,8 +1730,8 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 		goto exit;
 	}
 
-	memset(mc_ret_data, 0x00, payload_len);
-	err = ar0521_read(client, mc_ret_data, payload_len);
+	memset(mc_ret_data_0234, 0x00, payload_len);
+	err = ar0234_read(client, mc_ret_data_0234, payload_len);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -1724,9 +1740,9 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data[payload_len - 2];
-	calc_crc =
-		errorcheck(&mc_ret_data[2], payload_len - HEADER_FOOTER_SIZE);
+	orig_crc = mc_ret_data_0234[payload_len - 2];
+	calc_crc = errorcheck(&mc_ret_data_0234[2],
+			      payload_len - HEADER_FOOTER_SIZE);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
 			__func__, __LINE__, orig_crc, calc_crc);
@@ -1735,7 +1751,7 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 	}
 
 	/* Verify Errcode */
-	errcode = mc_ret_data[payload_len - 1];
+	errcode = mc_ret_data_0234[payload_len - 1];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev, " %s(%d) Errcode - 0x%02x \n", __func__,
 			__LINE__, errcode);
@@ -1744,16 +1760,17 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 	}
 
 	strncpy((char *)mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_name,
-		&mc_ret_data[2], MAX_CTRL_UI_STRING_LEN);
+		&mc_ret_data_0234[2], MAX_CTRL_UI_STRING_LEN);
 
-	mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_ui_type = mc_ret_data[34];
+	mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_ui_type =
+		mc_ret_data_0234[34];
 	mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_ui_flags =
-		mc_ret_data[35] << 8 | mc_ret_data[36];
+		mc_ret_data_0234[35] << 8 | mc_ret_data_0234[36];
 
 	if (mcu_ui_info->ctrl_ui_data.ctrl_ui_info.ctrl_ui_type ==
 	    V4L2_CTRL_TYPE_MENU) {
 		mcu_ui_info->ctrl_ui_data.ctrl_menu_info.num_menu_elem =
-			mc_ret_data[37];
+			mc_ret_data_0234[37];
 
 		mcu_ui_info->ctrl_ui_data.ctrl_menu_info.menu =
 			devm_kzalloc(&client->dev,
@@ -1771,10 +1788,11 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 					     GFP_KERNEL);
 			strncpy((char *)mcu_ui_info->ctrl_ui_data.ctrl_menu_info
 					.menu[i],
-				&mc_ret_data[38 + (i * MAX_CTRL_UI_STRING_LEN)],
+				&mc_ret_data_0234[38 +
+						  (i * MAX_CTRL_UI_STRING_LEN)],
 				MAX_CTRL_UI_STRING_LEN);
 
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 			pr_info(" Menu Element %d : %s \n", i,
 				mcu_ui_info->ctrl_ui_data.ctrl_menu_info
 					.menu[i]);
@@ -1786,14 +1804,14 @@ static int mcu_get_ctrl_ui(struct i2c_client *client,
 
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 
 	return ret;
 }
 
 static int mcu_isp_configuration(uint8_t cmd_id, struct i2c_client *client)
 {
-	unsigned char mc_data[100];
+	unsigned char mc_data_0234[100];
 	uint32_t payload_len = 0;
 
 	uint16_t payload_data;
@@ -1802,34 +1820,34 @@ static int mcu_isp_configuration(uint8_t cmd_id, struct i2c_client *client)
 	int retry = 1000, err = 0;
 
 	/*lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 	/* First Txn Payload length = 0 */
 	payload_len = 2;
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = cmd_id;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = cmd_id;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	ar0521_write(client, mc_data, TX_LEN_PKT);
+	ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = cmd_id;
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = cmd_id;
 
 	switch (cmd_id) {
 	case CMD_ID_LANE_CONFIG:
 		/*Lane configuration */
-		payload_data = ar0521_data.mipi_lane_config == 4 ? NUM_LANES_4 :
+		payload_data = ar0234_data.mipi_lane_config == 4 ? NUM_LANES_4 :
 								   NUM_LANES_2;
-		mc_data[2] = payload_data >> 8;
-		mc_data[3] = payload_data & 0xFF;
+		mc_data_0234[2] = payload_data >> 8;
+		mc_data_0234[3] = payload_data & 0xFF;
 		break;
 	case CMD_ID_MIPI_CLK_CONFIG:
 		/* MIPI CLK Configuration */
-		payload_data = ar0521_data.mipi_clk_config;
-		mc_data[2] = payload_data >> 8;
-		mc_data[3] = payload_data & 0xFF;
+		payload_data = ar0234_data.mipi_clk_config;
+		mc_data_0234[2] = payload_data >> 8;
+		mc_data_0234[3] = payload_data & 0xFF;
 		break;
 	default:
 		dev_err(&client->dev, "MCU ISP CONF Error\n");
@@ -1838,8 +1856,8 @@ static int mcu_isp_configuration(uint8_t cmd_id, struct i2c_client *client)
 	}
 
 	/* CRC*/
-	mc_data[4] = errorcheck(&mc_data[2], payload_len);
-	err = ar0521_write(client, mc_data, payload_len + 3);
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], payload_len);
+	err = ar0234_write(client, mc_data_0234, payload_len + 3);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -1876,7 +1894,7 @@ static int mcu_isp_configuration(uint8_t cmd_id, struct i2c_client *client)
 	err = -ETIMEDOUT;
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 	return err;
 }
 
@@ -1891,7 +1909,7 @@ static int mcu_stream_config(struct i2c_client *client, uint32_t format,
 	static uint16_t prev_index = 0xFFFE;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 
 	cmd_id = CMD_ID_STREAM_CONFIG;
 	if (mcu_get_cmd_status(client, &cmd_id, &cmd_status, &retcode) < 0) {
@@ -1917,12 +1935,12 @@ static int mcu_stream_config(struct i2c_client *client, uint32_t format,
 		}
 	}
 
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 	pr_info(" Index = 0x%04x , format = 0x%08x, width = %hu,"
 		" height = %hu, frate num = %hu \n",
-		index, format, ar0521_data.mcu_cam_frmfmt[mode].size.width,
-		ar0521_data.mcu_cam_frmfmt[mode].size.height,
-		ar0521_data.mcu_cam_frmfmt[mode].framerates[frate_index]);
+		index, format, ar0234_data.mcu_cam_frmfmt[mode].size.width,
+		ar0234_data.mcu_cam_frmfmt[mode].size.height,
+		ar0234_data.mcu_cam_frmfmt[mode].framerates[frate_index]);
 #endif
 
 	if (index == 0xFFFF) {
@@ -1931,7 +1949,7 @@ static int mcu_stream_config(struct i2c_client *client, uint32_t format,
 	}
 
 	if (prev_index == index) {
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 		pr_info("Skipping Previous mode set ... \n");
 #endif
 		ret = 0;
@@ -1942,45 +1960,45 @@ issue_cmd:
 	/* First Txn Payload length = 0 */
 	payload_len = 14;
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_STREAM_CONFIG;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_STREAM_CONFIG;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	ar0521_write(client, mc_data, TX_LEN_PKT);
+	ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_STREAM_CONFIG;
-	mc_data[2] = index >> 8;
-	mc_data[3] = index & 0xFF;
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_STREAM_CONFIG;
+	mc_data_0234[2] = index >> 8;
+	mc_data_0234[3] = index & 0xFF;
 
 	/* Format Fourcc - currently only YUYV */
-	mc_data[4] = format >> 24;
-	mc_data[5] = format >> 16;
-	mc_data[6] = format >> 8;
-	mc_data[7] = format & 0xFF;
+	mc_data_0234[4] = format >> 24;
+	mc_data_0234[5] = format >> 16;
+	mc_data_0234[6] = format >> 8;
+	mc_data_0234[7] = format & 0xFF;
 
 	/* width */
-	mc_data[8] = ar0521_data.mcu_cam_frmfmt[mode].size.width >> 8;
-	mc_data[9] = ar0521_data.mcu_cam_frmfmt[mode].size.width & 0xFF;
+	mc_data_0234[8] = ar0234_data.mcu_cam_frmfmt[mode].size.width >> 8;
+	mc_data_0234[9] = ar0234_data.mcu_cam_frmfmt[mode].size.width & 0xFF;
 
 	/* height */
-	mc_data[10] = ar0521_data.mcu_cam_frmfmt[mode].size.height >> 8;
-	mc_data[11] = ar0521_data.mcu_cam_frmfmt[mode].size.height & 0xFF;
+	mc_data_0234[10] = ar0234_data.mcu_cam_frmfmt[mode].size.height >> 8;
+	mc_data_0234[11] = ar0234_data.mcu_cam_frmfmt[mode].size.height & 0xFF;
 
 	/* frame rate num */
-	mc_data[12] =
-		ar0521_data.mcu_cam_frmfmt[mode].framerates[frate_index] >> 8;
-	mc_data[13] =
-		ar0521_data.mcu_cam_frmfmt[mode].framerates[frate_index] & 0xFF;
+	mc_data_0234[12] =
+		ar0234_data.mcu_cam_frmfmt[mode].framerates[frate_index] >> 8;
+	mc_data_0234[13] =
+		ar0234_data.mcu_cam_frmfmt[mode].framerates[frate_index] & 0xFF;
 
 	/* frame rate denom */
-	mc_data[14] = 0x00;
-	mc_data[15] = 0x01;
+	mc_data_0234[14] = 0x00;
+	mc_data_0234[15] = 0x01;
 
-	mc_data[16] = errorcheck(&mc_data[2], 14);
-	err = ar0521_write(client, mc_data, 17);
+	mc_data_0234[16] = errorcheck(&mc_data_0234[2], 14);
+	err = ar0234_write(client, mc_data_0234, 17);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -2032,7 +2050,7 @@ exit:
 		prev_index = index;
 
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 
 	return ret;
 }
@@ -2046,22 +2064,22 @@ static int mcu_isp_power_down(struct i2c_client *client)
 	int retry = 1000, err = 0;
 
 	/*lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 
 	/* First Txn Payload length = 0 */
 	payload_len = 0;
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_ISP_PDOWN;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_ISP_PDOWN;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	ar0521_write(client, mc_data, TX_LEN_PKT);
+	ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_ISP_PDOWN;
-	err = ar0521_write(client, mc_data, 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_ISP_PDOWN;
+	err = ar0234_write(client, mc_data_0234, 2);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -2098,7 +2116,7 @@ static int mcu_isp_power_down(struct i2c_client *client)
 	err = -ETIMEDOUT;
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 	return err;
 }
 
@@ -2111,21 +2129,21 @@ static int mcu_isp_power_wakeup(struct i2c_client *client)
 	int retry = 1000, err = 0;
 
 	/*lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 	/* First Txn Payload length = 0 */
 	payload_len = 0;
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_ISP_PUP;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_ISP_PUP;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	ar0521_write(client, mc_data, TX_LEN_PKT);
+	ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_ISP_PUP;
-	err = ar0521_write(client, mc_data, 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_ISP_PUP;
+	err = ar0234_write(client, mc_data_0234, 2);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -2163,7 +2181,7 @@ static int mcu_isp_power_wakeup(struct i2c_client *client)
 	err = -ETIMEDOUT;
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 	return err;
 }
 
@@ -2178,7 +2196,7 @@ static int mcu_set_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	uint32_t ctrl_id = 0;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 
 	ctrl_id = arg_ctrl_id;
 
@@ -2199,41 +2217,41 @@ static int mcu_set_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	/* First Txn Payload length = 0 */
 	payload_len = 11;
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_SET_CTRL;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_SET_CTRL;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	ar0521_write(client, mc_data, TX_LEN_PKT);
+	ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
 	/* Second Txn */
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_SET_CTRL;
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_SET_CTRL;
 
 	/* Index */
-	mc_data[2] = index >> 8;
-	mc_data[3] = index & 0xFF;
+	mc_data_0234[2] = index >> 8;
+	mc_data_0234[3] = index & 0xFF;
 
 	/* Control ID */
-	mc_data[4] = ctrl_id >> 24;
-	mc_data[5] = ctrl_id >> 16;
-	mc_data[6] = ctrl_id >> 8;
-	mc_data[7] = ctrl_id & 0xFF;
+	mc_data_0234[4] = ctrl_id >> 24;
+	mc_data_0234[5] = ctrl_id >> 16;
+	mc_data_0234[6] = ctrl_id >> 8;
+	mc_data_0234[7] = ctrl_id & 0xFF;
 
 	/* Ctrl Type */
-	mc_data[8] = ctrl_type;
+	mc_data_0234[8] = ctrl_type;
 
 	/* Ctrl Value */
-	mc_data[9] = curr_val >> 24;
-	mc_data[10] = curr_val >> 16;
-	mc_data[11] = curr_val >> 8;
-	mc_data[12] = curr_val & 0xFF;
+	mc_data_0234[9] = curr_val >> 24;
+	mc_data_0234[10] = curr_val >> 16;
+	mc_data_0234[11] = curr_val >> 8;
+	mc_data_0234[12] = curr_val & 0xFF;
 
 	/* CRC */
-	mc_data[13] = errorcheck(&mc_data[2], 11);
+	mc_data_0234[13] = errorcheck(&mc_data_0234[2], 11);
 
-	err = ar0521_write(client, mc_data, 14);
+	err = ar0234_write(client, mc_data_0234, 14);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -2269,7 +2287,7 @@ static int mcu_set_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 
 	return ret;
 }
@@ -2285,7 +2303,7 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	uint32_t ctrl_id = 0;
 
 	/* lock semaphore */
-	mutex_lock(&mcu_i2c_mutex);
+	mutex_lock(&mcu_i2c_mutex_0234);
 
 	ctrl_id = arg_ctrl_id;
 
@@ -2312,20 +2330,20 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	/* First Txn Payload length = 2 */
 	payload_len = 2;
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_GET_CTRL;
-	mc_data[2] = payload_len >> 8;
-	mc_data[3] = payload_len & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_GET_CTRL;
+	mc_data_0234[2] = payload_len >> 8;
+	mc_data_0234[3] = payload_len & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
 
-	ar0521_write(client, mc_data, TX_LEN_PKT);
+	ar0234_write(client, mc_data_0234, TX_LEN_PKT);
 
-	mc_data[0] = CMD_SIGNATURE;
-	mc_data[1] = CMD_ID_GET_CTRL;
-	mc_data[2] = index >> 8;
-	mc_data[3] = index & 0xFF;
-	mc_data[4] = errorcheck(&mc_data[2], 2);
-	err = ar0521_write(client, mc_data, 5);
+	mc_data_0234[0] = CMD_SIGNATURE;
+	mc_data_0234[1] = CMD_ID_GET_CTRL;
+	mc_data_0234[2] = index >> 8;
+	mc_data_0234[3] = index & 0xFF;
+	mc_data_0234[4] = errorcheck(&mc_data_0234[2], 2);
+	err = ar0234_write(client, mc_data_0234, 5);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -2333,7 +2351,7 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 		goto exit;
 	}
 
-	err = ar0521_read(client, mc_ret_data, RX_LEN_PKT);
+	err = ar0234_read(client, mc_ret_data_0234, RX_LEN_PKT);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -2342,8 +2360,8 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data[4];
-	calc_crc = errorcheck(&mc_ret_data[2], 2);
+	orig_crc = mc_ret_data_0234[4];
+	calc_crc = errorcheck(&mc_ret_data_0234[2], 2);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
 			__func__, __LINE__, orig_crc, calc_crc);
@@ -2351,12 +2369,12 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 		goto exit;
 	}
 
-	if (((mc_ret_data[2] << 8) | mc_ret_data[3]) == 0) {
+	if (((mc_ret_data_0234[2] << 8) | mc_ret_data_0234[3]) == 0) {
 		ret = -EIO;
 		goto exit;
 	}
 
-	errcode = mc_ret_data[5];
+	errcode = mc_ret_data_0234[5];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev, " %s(%d) Errcode - 0x%02x \n", __func__,
 			__LINE__, errcode);
@@ -2364,10 +2382,10 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 		goto exit;
 	}
 
-	payload_len =
-		((mc_ret_data[2] << 8) | mc_ret_data[3]) + HEADER_FOOTER_SIZE;
-	memset(mc_ret_data, 0x00, payload_len);
-	err = ar0521_read(client, mc_ret_data, payload_len);
+	payload_len = ((mc_ret_data_0234[2] << 8) | mc_ret_data_0234[3]) +
+		      HEADER_FOOTER_SIZE;
+	memset(mc_ret_data_0234, 0x00, payload_len);
+	err = ar0234_read(client, mc_ret_data_0234, payload_len);
 	if (err != 0) {
 		dev_err(&client->dev, " %s(%d) Error - %d \n", __func__,
 			__LINE__, err);
@@ -2376,9 +2394,9 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	}
 
 	/* Verify CRC */
-	orig_crc = mc_ret_data[payload_len - 2];
-	calc_crc =
-		errorcheck(&mc_ret_data[2], payload_len - HEADER_FOOTER_SIZE);
+	orig_crc = mc_ret_data_0234[payload_len - 2];
+	calc_crc = errorcheck(&mc_ret_data_0234[2],
+			      payload_len - HEADER_FOOTER_SIZE);
 	if (orig_crc != calc_crc) {
 		dev_err(&client->dev, " %s(%d) CRC 0x%02x != 0x%02x \n",
 			__func__, __LINE__, orig_crc, calc_crc);
@@ -2387,7 +2405,7 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 	}
 
 	/* Verify Errcode */
-	errcode = mc_ret_data[payload_len - 1];
+	errcode = mc_ret_data_0234[payload_len - 1];
 	if (errcode != ERRCODE_SUCCESS) {
 		dev_err(&client->dev, " %s(%d) Errcode - 0x%02x \n", __func__,
 			__LINE__, errcode);
@@ -2397,12 +2415,13 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 
 	/* Ctrl type starts from index 6 */
 
-	*ctrl_type = mc_ret_data[6];
+	*ctrl_type = mc_ret_data_0234[6];
 
 	switch (*ctrl_type) {
 	case CTRL_STANDARD:
-		*curr_val = mc_ret_data[7] << 24 | mc_ret_data[8] << 16 |
-			    mc_ret_data[9] << 8 | mc_ret_data[10];
+		*curr_val = mc_ret_data_0234[7] << 24 |
+			    mc_ret_data_0234[8] << 16 |
+			    mc_ret_data_0234[9] << 8 | mc_ret_data_0234[10];
 		break;
 
 	case CTRL_EXTENDED:
@@ -2412,7 +2431,7 @@ static int mcu_get_ctrl(struct i2c_client *client, uint32_t arg_ctrl_id,
 
 exit:
 	/* unlock semaphore */
-	mutex_unlock(&mcu_i2c_mutex);
+	mutex_unlock(&mcu_i2c_mutex_0234);
 
 	return ret;
 }
@@ -2434,7 +2453,7 @@ static void toggle_gpio(unsigned int gpio, int val)
 	}
 }
 
-static int ar0521_querymenu(struct v4l2_subdev *sd, struct v4l2_querymenu *qm)
+static int ar0234_querymenu(struct v4l2_subdev *sd, struct v4l2_querymenu *qm)
 {
 	uint32_t index = 0;
 	int loop;
@@ -2477,7 +2496,7 @@ static int ar0521_querymenu(struct v4l2_subdev *sd, struct v4l2_querymenu *qm)
 	return 0;
 }
 
-static int ar0521_queryctrl(struct v4l2_subdev *sd, struct v4l2_queryctrl *qc)
+static int ar0234_queryctrl(struct v4l2_subdev *sd, struct v4l2_queryctrl *qc)
 {
 	int index, ctrl_index = -1, ctrl_id;
 	bool next_ctrl = (qc->id & V4L2_CTRL_FLAG_NEXT_CTRL);
@@ -2557,9 +2576,9 @@ static int ar0521_queryctrl(struct v4l2_subdev *sd, struct v4l2_queryctrl *qc)
 	return 0;
 }
 
-static int ar0521_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
+static int ar0234_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 {
-	struct i2c_client *client = ar0521_data.i2c_client;
+	struct i2c_client *client = ar0234_data.i2c_client;
 	int err = 0;
 	uint8_t ctrl_type = 0;
 	int ctrl_val = 0;
@@ -2581,9 +2600,9 @@ static int ar0521_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	return err;
 }
 
-static int ar0521_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
+static int ar0234_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 {
-	struct i2c_client *client = ar0521_data.i2c_client;
+	struct i2c_client *client = ar0234_data.i2c_client;
 	int err = 0, index, ctrl_index = 0;
 
 	if (sd == NULL || ctrl == NULL)
@@ -2613,7 +2632,7 @@ static int ar0521_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
 	return err;
 }
 
-static int ar0521_g_ext_ctrls(struct v4l2_subdev *sd,
+static int ar0234_g_ext_ctrls(struct v4l2_subdev *sd,
 			      struct v4l2_ext_controls *ctrls)
 {
 	int i, err = 0;
@@ -2627,7 +2646,7 @@ static int ar0521_g_ext_ctrls(struct v4l2_subdev *sd,
 			.id = ext_ctrl->id,
 		};
 
-		err = ar0521_g_ctrl(sd, &ctrl);
+		err = ar0234_g_ctrl(sd, &ctrl);
 		if (err) {
 			ctrls->error_idx = ctrls->count;
 			break;
@@ -2639,7 +2658,7 @@ static int ar0521_g_ext_ctrls(struct v4l2_subdev *sd,
 	return err;
 }
 
-static int ar0521_try_ext_ctrls(struct v4l2_subdev *sd,
+static int ar0234_try_ext_ctrls(struct v4l2_subdev *sd,
 				struct v4l2_ext_controls *ctrls)
 {
 	int i;
@@ -2675,7 +2694,7 @@ static int ar0521_try_ext_ctrls(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int ar0521_s_ext_ctrls(struct v4l2_subdev *sd,
+static int ar0234_s_ext_ctrls(struct v4l2_subdev *sd,
 			      struct v4l2_ext_controls *ctrls)
 {
 	int i, err = 0;
@@ -2688,7 +2707,7 @@ static int ar0521_s_ext_ctrls(struct v4l2_subdev *sd,
 		struct v4l2_control ctrl = { .id = ext_ctrl->id,
 					     .value = ext_ctrl->value };
 
-		err = ar0521_s_ctrl(sd, &ctrl);
+		err = ar0234_s_ctrl(sd, &ctrl);
 		if (err) {
 			/*
 			 * TODO: We would have to indicate whether there
@@ -2709,7 +2728,7 @@ static int ar0521_s_ext_ctrls(struct v4l2_subdev *sd,
 }
 
 static int
-ar0521_enum_frameintervals(struct v4l2_subdev *sd,
+ar0234_enum_frameintervals(struct v4l2_subdev *sd,
 			   struct v4l2_subdev_pad_config *cfg,
 			   struct v4l2_subdev_frame_interval_enum *fival)
 {
@@ -2721,22 +2740,22 @@ ar0521_enum_frameintervals(struct v4l2_subdev *sd,
 		return -EINVAL;
 	}
 
-	if (fival->code != ar0521_data.fmt.code) {
+	if (fival->code != ar0234_data.fmt.code) {
 		return -EINVAL;
 	}
 
-	for (j = 0; j < ar0521_data.num_frm_fmts; j++) {
-		if (fival->width == ar0521_data.mcu_cam_frmfmt[j].size.width &&
+	for (j = 0; j < ar0234_data.num_frm_fmts; j++) {
+		if (fival->width == ar0234_data.mcu_cam_frmfmt[j].size.width &&
 		    fival->height ==
-			    ar0521_data.mcu_cam_frmfmt[j].size.height) {
+			    ar0234_data.mcu_cam_frmfmt[j].size.height) {
 			if (fival->index >=
-			    ar0521_data.mcu_cam_frmfmt[j].num_framerates) {
+			    ar0234_data.mcu_cam_frmfmt[j].num_framerates) {
 				return -EINVAL;
 			}
 
 			fival->interval.numerator = 1;
 			fival->interval.denominator =
-				ar0521_data.mcu_cam_frmfmt[j]
+				ar0234_data.mcu_cam_frmfmt[j]
 					.framerates[fival->index];
 
 			return 0;
@@ -2745,40 +2764,40 @@ ar0521_enum_frameintervals(struct v4l2_subdev *sd,
 	return -EINVAL;
 }
 
-static int ar0521_enum_framesizes(struct v4l2_subdev *sd,
+static int ar0234_enum_framesizes(struct v4l2_subdev *sd,
 				  struct v4l2_subdev_pad_config *cfg,
 				  struct v4l2_subdev_frame_size_enum *fse)
 {
-	if (fse->index >= ar0521_data.num_frm_fmts) {
+	if (fse->index >= ar0234_data.num_frm_fmts) {
 		return -EINVAL;
 	}
 
-	if (fse->code != ar0521_data.fmt.code) {
+	if (fse->code != ar0234_data.fmt.code) {
 		return -EINVAL;
 	}
 
-	fse->max_width = ar0521_data.mcu_cam_frmfmt[fse->index].size.width;
+	fse->max_width = ar0234_data.mcu_cam_frmfmt[fse->index].size.width;
 	fse->min_width = fse->max_width;
 
-	fse->max_height = ar0521_data.mcu_cam_frmfmt[fse->index].size.height;
+	fse->max_height = ar0234_data.mcu_cam_frmfmt[fse->index].size.height;
 	fse->min_height = fse->max_height;
 
 	return 0;
 }
 
-static int ar0521_enum_mbus_code(struct v4l2_subdev *sd,
+static int ar0234_enum_mbus_code(struct v4l2_subdev *sd,
 				 struct v4l2_subdev_pad_config *cfg,
 				 struct v4l2_subdev_mbus_code_enum *code)
 {
-	if (code->pad || code->index >= AR0521_MAX_FORMAT_SUPPORTED)
+	if (code->pad || code->index >= AR0234_MAX_FORMAT_SUPPORTED)
 		return -EINVAL;
 
-	code->code = ar0521_data.fmt.code;
+	code->code = ar0234_data.fmt.code;
 
 	return 0;
 }
 
-static int ar0521_s_stream(struct v4l2_subdev *sd, int enable)
+static int ar0234_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	if (!enable) {
 		/* Perform Stream Off Sequence - if any */
@@ -2790,36 +2809,36 @@ static int ar0521_s_stream(struct v4l2_subdev *sd, int enable)
 	return 0;
 }
 
-static int ar0521_g_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *param)
+static int ar0234_g_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *param)
 {
-	int mode = ar0521_data.streamcap.capturemode;
+	int mode = ar0234_data.streamcap.capturemode;
 
 	param->parm.capture.capability |= V4L2_CAP_TIMEPERFRAME;
 
 	param->parm.capture.timeperframe.denominator =
-		ar0521_data.mcu_cam_frmfmt[mode]
-			.framerates[ar0521_data.frate_index];
+		ar0234_data.mcu_cam_frmfmt[mode]
+			.framerates[ar0234_data.frate_index];
 	param->parm.capture.timeperframe.numerator = 1;
 
 	return 0;
 }
 
-static int ar0521_s_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *param)
+static int ar0234_s_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *param)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	int ret = 0, err = 0;
-	int mode = ar0521_data.streamcap.capturemode;
-	int fourcc = ar0521_data.pix.pixelformat;
+	int mode = ar0234_data.streamcap.capturemode;
+	int fourcc = ar0234_data.pix.pixelformat;
 
 	param->parm.capture.capability = V4L2_CAP_TIMEPERFRAME;
 	memset(param->parm.capture.reserved, 0, 4 * sizeof(u32));
 
 	if (param->parm.capture.timeperframe.denominator == 0 &&
 	    param->parm.capture.timeperframe.numerator == 0 &&
-	    ar0521_data.mcu_cam_frmfmt[mode].num_framerates == 1) {
+	    ar0234_data.mcu_cam_frmfmt[mode].num_framerates == 1) {
 		param->parm.capture.timeperframe.denominator =
-			ar0521_data.mcu_cam_frmfmt[mode]
-				.framerates[ar0521_data.frate_index];
+			ar0234_data.mcu_cam_frmfmt[mode]
+				.framerates[ar0234_data.frate_index];
 		param->parm.capture.timeperframe.numerator = 1;
 		/*
 		 * We would have to reset the frame interval to a
@@ -2834,15 +2853,15 @@ static int ar0521_s_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *param)
 		return -EINVAL;
 	}
 
-	for (ret = 0; ret < ar0521_data.mcu_cam_frmfmt[mode].num_framerates;
+	for (ret = 0; ret < ar0234_data.mcu_cam_frmfmt[mode].num_framerates;
 	     ret++) {
-		if ((ar0521_data.mcu_cam_frmfmt[mode].framerates[ret] ==
+		if ((ar0234_data.mcu_cam_frmfmt[mode].framerates[ret] ==
 		     param->parm.capture.timeperframe.denominator)) {
-			ar0521_data.frate_index = ret;
+			ar0234_data.frate_index = ret;
 
 			/* call stream config with width, height, frame rate */
 			err = mcu_stream_config(client, fourcc, mode,
-						ar0521_data.frate_index);
+						ar0234_data.frate_index);
 			if (err < 0) {
 				dev_err(&client->dev,
 					"%s: Failed stream_config \n",
@@ -2859,13 +2878,13 @@ static int ar0521_s_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *param)
 	return -EINVAL;
 }
 
-static int ar0521_s_power(struct v4l2_subdev *sd, int on)
+static int ar0234_s_power(struct v4l2_subdev *sd, int on)
 {
 	/* Perform Power On/Off Sequence - if any  */
 	return 0;
 }
 
-static int ar0521_get_fmt(struct v4l2_subdev *sd,
+static int ar0234_get_fmt(struct v4l2_subdev *sd,
 			  struct v4l2_subdev_pad_config *cfg,
 			  struct v4l2_subdev_format *format)
 {
@@ -2874,17 +2893,17 @@ static int ar0521_get_fmt(struct v4l2_subdev *sd,
 	if (format->pad)
 		return -EINVAL;
 
-	format->format.code = ar0521_data.fmt.code;
-	format->format.colorspace = ar0521_data.fmt.colorspace;
+	format->format.code = ar0234_data.fmt.code;
+	format->format.colorspace = ar0234_data.fmt.colorspace;
 	format->format.field = V4L2_FIELD_NONE;
 
-	format->format.width = ar0521_data.pix.width;
-	format->format.height = ar0521_data.pix.height;
+	format->format.width = ar0234_data.pix.width;
+	format->format.height = ar0234_data.pix.height;
 
 	return ret;
 }
 
-static int ar0521_set_fmt(struct v4l2_subdev *sd,
+static int ar0234_set_fmt(struct v4l2_subdev *sd,
 			  struct v4l2_subdev_pad_config *cfg,
 			  struct v4l2_subdev_format *format)
 {
@@ -2892,14 +2911,14 @@ static int ar0521_set_fmt(struct v4l2_subdev *sd,
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	int flag = 0, err = 0;
 
-	format->format.code = ar0521_data.fmt.code;
-	format->format.colorspace = ar0521_data.fmt.colorspace;
+	format->format.code = ar0234_data.fmt.code;
+	format->format.colorspace = ar0234_data.fmt.colorspace;
 	format->format.field = V4L2_FIELD_NONE;
 
-	for (i = 0; i < ar0521_data.num_frm_fmts; i++) {
-		if (ar0521_data.mcu_cam_frmfmt[i].size.width ==
+	for (i = 0; i < ar0234_data.num_frm_fmts; i++) {
+		if (ar0234_data.mcu_cam_frmfmt[i].size.width ==
 			    format->format.width &&
-		    ar0521_data.mcu_cam_frmfmt[i].size.height ==
+		    ar0234_data.mcu_cam_frmfmt[i].size.height ==
 			    format->format.height) {
 			flag = 1;
 			break;
@@ -2907,8 +2926,8 @@ static int ar0521_set_fmt(struct v4l2_subdev *sd,
 	}
 
 	if (flag == 0) {
-		format->format.width = ar0521_data.pix.width;
-		format->format.height = ar0521_data.pix.height;
+		format->format.width = ar0234_data.pix.width;
+		format->format.height = ar0234_data.pix.height;
 	}
 
 	if (format->which == V4L2_SUBDEV_FORMAT_TRY) {
@@ -2916,96 +2935,96 @@ static int ar0521_set_fmt(struct v4l2_subdev *sd,
 	}
 
 	/* call stream config with width, height, frame rate */
-	err = mcu_stream_config(client, ar0521_data.pix.pixelformat,
-				ar0521_data.mcu_cam_frmfmt[i].mode,
-				ar0521_data.frate_index);
+	err = mcu_stream_config(client, ar0234_data.pix.pixelformat,
+				ar0234_data.mcu_cam_frmfmt[i].mode,
+				ar0234_data.frate_index);
 	if (err < 0) {
 		dev_err(&client->dev, "%s: Failed stream_config \n", __func__);
 		return err;
 	}
 
-	ar0521_data.pix.width = format->format.width;
-	ar0521_data.pix.height = format->format.height;
-	ar0521_data.streamcap.capturemode = ar0521_data.mcu_cam_frmfmt[i].mode;
+	ar0234_data.pix.width = format->format.width;
+	ar0234_data.pix.height = format->format.height;
+	ar0234_data.streamcap.capturemode = ar0234_data.mcu_cam_frmfmt[i].mode;
 
 	mdelay(10);
 
 	return ret;
 }
 
-static int ar0521_link_setup(struct media_entity *entity,
+static int ar0234_link_setup(struct media_entity *entity,
 			     const struct media_pad *local,
 			     const struct media_pad *remote, u32 flags)
 {
 	return 0;
 }
 
-static struct v4l2_subdev_video_ops ar0521_subdev_video_ops = {
-	.g_parm = ar0521_g_parm,
-	.s_parm = ar0521_s_parm,
-	.s_stream = ar0521_s_stream,
+static struct v4l2_subdev_video_ops ar0234_subdev_video_ops = {
+	.g_parm = ar0234_g_parm,
+	.s_parm = ar0234_s_parm,
+	.s_stream = ar0234_s_stream,
 };
 
-static const struct v4l2_subdev_pad_ops ar0521_subdev_pad_ops = {
-	.enum_frame_size = ar0521_enum_framesizes,
-	.enum_frame_interval = ar0521_enum_frameintervals,
-	.enum_mbus_code = ar0521_enum_mbus_code,
-	.set_fmt = ar0521_set_fmt,
-	.get_fmt = ar0521_get_fmt,
+static const struct v4l2_subdev_pad_ops ar0234_subdev_pad_ops = {
+	.enum_frame_size = ar0234_enum_framesizes,
+	.enum_frame_interval = ar0234_enum_frameintervals,
+	.enum_mbus_code = ar0234_enum_mbus_code,
+	.set_fmt = ar0234_set_fmt,
+	.get_fmt = ar0234_get_fmt,
 };
 
-static struct v4l2_subdev_core_ops ar0521_subdev_core_ops = {
-	.s_power = ar0521_s_power,
-	.queryctrl = ar0521_queryctrl,
-	.g_ctrl = ar0521_g_ctrl,
-	.s_ctrl = ar0521_s_ctrl,
-	.g_ext_ctrls = ar0521_g_ext_ctrls,
-	.s_ext_ctrls = ar0521_s_ext_ctrls,
-	.try_ext_ctrls = ar0521_try_ext_ctrls,
-	.querymenu = ar0521_querymenu,
+static struct v4l2_subdev_core_ops ar0234_subdev_core_ops = {
+	.s_power = ar0234_s_power,
+	.queryctrl = ar0234_queryctrl,
+	.g_ctrl = ar0234_g_ctrl,
+	.s_ctrl = ar0234_s_ctrl,
+	.g_ext_ctrls = ar0234_g_ext_ctrls,
+	.s_ext_ctrls = ar0234_s_ext_ctrls,
+	.try_ext_ctrls = ar0234_try_ext_ctrls,
+	.querymenu = ar0234_querymenu,
 };
 
-static struct v4l2_subdev_ops ar0521_subdev_ops = {
-	.core = &ar0521_subdev_core_ops,
-	.video = &ar0521_subdev_video_ops,
-	.pad = &ar0521_subdev_pad_ops,
+static struct v4l2_subdev_ops ar0234_subdev_ops = {
+	.core = &ar0234_subdev_core_ops,
+	.video = &ar0234_subdev_video_ops,
+	.pad = &ar0234_subdev_pad_ops,
 };
 
-static const struct media_entity_operations ar0521_sd_media_ops = {
-	.link_setup = ar0521_link_setup,
+static const struct media_entity_operations ar0234_sd_media_ops = {
+	.link_setup = ar0234_link_setup,
 };
 
-static int ar0521_init(struct i2c_client *client)
+static int ar0234_init(struct i2c_client *client)
 {
 	u32 tgt_xclk; /* target xclk */
 	int ret = 0;
 
-	ar0521_data.on = true;
+	ar0234_data.on = true;
 
 	/* mclk */
-	tgt_xclk = ar0521_data.mclk;
-	tgt_xclk = min(tgt_xclk, (u32)AR0521_XCLK_MAX);
-	tgt_xclk = max(tgt_xclk, (u32)AR0521_XCLK_MIN);
-	ar0521_data.mclk = tgt_xclk;
+	tgt_xclk = ar0234_data.mclk;
+	tgt_xclk = min(tgt_xclk, (u32)AR0234_XCLK_MAX);
+	tgt_xclk = max(tgt_xclk, (u32)AR0234_XCLK_MIN);
+	ar0234_data.mclk = tgt_xclk;
 
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 	pr_info("mclk: %d MHz\n", tgt_xclk / 1000000);
 #endif
 
-	ret = mcu_stream_config(client, ar0521_data.pix.pixelformat,
-				ar0521_data.streamcap.capturemode,
-				ar0521_data.frate_index);
+	ret = mcu_stream_config(client, ar0234_data.pix.pixelformat,
+				ar0234_data.streamcap.capturemode,
+				ar0234_data.frate_index);
 
 	return ret;
 }
 
-static int ar0521_ctrls_init(ISP_CTRL_INFO *mcu_cam_ctrls)
+static int ar0234_ctrls_init(ISP_CTRL_INFO *mcu_cam_ctrls)
 {
 	struct i2c_client *client = NULL;
 	int numctrls = 0;
 	int err = 0, i = 0;
 
-	client = ar0521_data.i2c_client;
+	client = ar0234_data.i2c_client;
 
 	if (mcu_cam_ctrls == NULL) {
 		dev_err(&client->dev,
@@ -3044,12 +3063,12 @@ static int ar0521_ctrls_init(ISP_CTRL_INFO *mcu_cam_ctrls)
 	return 0;
 }
 
-static int ar0521_verify_mcu(struct i2c_client *client)
+static int ar0234_verify_mcu(struct i2c_client *client)
 {
 	int ret = 0,
 	try
 		= 0;
-	unsigned char fw_version[32] = { 0 };
+	unsigned char fw_version_0234[32] = { 0 };
 
 	if (client == NULL) {
 		dev_err(&client->dev, "%s: Invalid I2C client parameter\n",
@@ -3063,7 +3082,7 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 	 * We do this only when the reset_gpio and pwdn_gpio are
 	 * available.
 	 */
-	if (gpios_available()) {
+	if (gpios_available_2304()) {
 		toggle_gpio(pwdn_gpio, 0);
 		msleep(10);
 		toggle_gpio(reset_gpio, 0);
@@ -3071,11 +3090,8 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 		toggle_gpio(reset_gpio, 1);
 		msleep(500);
 
-		int power_down_value = gpio_get_value(pwdn_gpio);
-		int reset_value = gpio_get_value(reset_gpio);
-
 		for (try = 0; try < 10; try ++) {
-			ret = mcu_get_fw_version(client, fw_version);
+			ret = mcu_get_fw_version(client, fw_version_0234);
 			if (ret < 0) {
 				msleep(100);
 				continue;
@@ -3085,7 +3101,7 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 		}
 
 		if (ret == 0) {
-			ret = mcu_verify_fw_version(fw_version);
+			ret = mcu_verify_fw_version(fw_version_0234);
 		} else {
 			dev_dbg(&client->dev,
 				"Could not read the firmware version from the MCU\n");
@@ -3107,7 +3123,7 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 
 			pr_info(" Trying to Detect Bootloader mode\n");
 
-			if (gpios_available()) {
+			if (gpios_available_2304()) {
 				toggle_gpio(reset_gpio, 0);
 				msleep(10);
 				toggle_gpio(pwdn_gpio, 1);
@@ -3123,7 +3139,7 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 					msleep(100);
 					continue;
 				} else {
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 					pr_info(" Get Bload Version Success\n");
 #endif
 					break;
@@ -3142,7 +3158,7 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 				return -EFAULT;
 			}
 
-			if (gpios_available()) {
+			if (gpios_available_2304()) {
 				toggle_gpio(pwdn_gpio, 0);
 			}
 
@@ -3154,10 +3170,12 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 			 * of the firmware (in firmware mode).
 			 */
 			for (loop = 0; loop < 100; loop++) {
-				ret = mcu_get_fw_version(client, fw_version);
+				ret = mcu_get_fw_version(client,
+							 fw_version_0234);
 
 				if (ret == 0) {
-					ret = mcu_verify_fw_version(fw_version);
+					ret = mcu_verify_fw_version(
+						fw_version_0234);
 				}
 
 				if (ret < 0) {
@@ -3165,7 +3183,7 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 					msleep(100);
 					continue;
 				} else {
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 					pr_info(" Get FW Version Success\n");
 #endif
 					break;
@@ -3185,16 +3203,6 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 			"Hint: Connected only one camera? Is someone else using the "
 			"power down/reset GPIOs?\n";
 
-		int power_down_value = gpio_get_value(pwdn_gpio);
-		int reset_value = gpio_get_value(reset_gpio);
-
-		dev_info(&client->dev, "NO GPIOS AVAILABLE, VALUES:");
-
-		dev_info(&client->dev, "current value of power down: %d",
-			 power_down_value);
-		dev_info(&client->dev, "current value of reset: %d",
-			 reset_value);
-
 		/*
 		 * When we do not have the reset GPIO, we cannot toggle it
 		 * to make the MCU switch to firmware mode. So, we try getting
@@ -3212,7 +3220,6 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 		 *
 		 * So, we try to get the version of the bootloader.
 		 */
-
 		for (loop = 0; loop < 10; loop++) {
 			ret = mcu_bload_get_version(client);
 			if (ret < 0) {
@@ -3255,9 +3262,9 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 		 * the probe.
 		 */
 		if (get_firmware_version) {
-			ret = mcu_get_fw_version(client, fw_version);
+			ret = mcu_get_fw_version(client, fw_version_0234);
 			if (ret == 0) {
-				ret = mcu_verify_fw_version(fw_version);
+				ret = mcu_verify_fw_version(fw_version_0234);
 			} else {
 				dev_err(&client->dev,
 					"couldn't get the MCU firmware version");
@@ -3275,12 +3282,12 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 	}
 
 	dev_info(&client->dev, "Current Firmware Version - (%.32s)\n",
-		 fw_version);
+		 fw_version_0234);
 
 	return 0;
 }
 
-static int ar0521_parse_and_get_clocks(struct device *dev)
+static int ar0234_parse_and_get_clocks(struct device *dev)
 {
 	int retval = 0;
 
@@ -3289,17 +3296,17 @@ static int ar0521_parse_and_get_clocks(struct device *dev)
 		return -EINVAL;
 	}
 
-	ar0521_data.sensor_clk = devm_clk_get(dev, "xclk");
-	if (IS_ERR(ar0521_data.sensor_clk)) {
+	ar0234_data.sensor_clk = devm_clk_get(dev, "xclk");
+	if (IS_ERR(ar0234_data.sensor_clk)) {
 		/* assuming clock enabled by default */
-		ar0521_data.sensor_clk = NULL;
+		ar0234_data.sensor_clk = NULL;
 		dev_err(dev, "clock-frequency missing or invalid\n");
-		return PTR_ERR(ar0521_data.sensor_clk);
+		return PTR_ERR(ar0234_data.sensor_clk);
 	}
 
 	/*mclk reserved for future use*/
 	retval =
-		of_property_read_u32(dev->of_node, "mclk", &(ar0521_data.mclk));
+		of_property_read_u32(dev->of_node, "mclk", &(ar0234_data.mclk));
 	if (retval) {
 		dev_err(dev, "mclk missing or invalid\n");
 		return retval;
@@ -3307,14 +3314,14 @@ static int ar0521_parse_and_get_clocks(struct device *dev)
 
 	/*mclk_source reserved for future use*/
 	retval = of_property_read_u32(dev->of_node, "mclk_source",
-				      (u32 *)&(ar0521_data.mclk_source));
+				      (u32 *)&(ar0234_data.mclk_source));
 	if (retval) {
 		dev_err(dev, "mclk_source missing or invalid\n");
 		return retval;
 	}
 
 	retval = of_property_read_u32(dev->of_node, "csi_id",
-				      &(ar0521_data.csi));
+				      &(ar0234_data.csi));
 	if (retval) {
 		dev_err(dev, "csi id missing or invalid\n");
 		return retval;
@@ -3323,7 +3330,7 @@ static int ar0521_parse_and_get_clocks(struct device *dev)
 	return 0;
 }
 
-static int ar0521_parse_and_get_gpios(struct device *dev)
+static int ar0234_parse_and_get_gpios(struct device *dev)
 {
 	int err;
 	struct device_node *node = NULL;
@@ -3340,7 +3347,7 @@ static int ar0521_parse_and_get_gpios(struct device *dev)
 		dev_err(dev, "no sensor pwdn pin available");
 		return -EINVAL;
 	} else {
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 		printk("BOOT = %x \n", pwdn_gpio);
 #endif
 	}
@@ -3350,13 +3357,13 @@ static int ar0521_parse_and_get_gpios(struct device *dev)
 		dev_err(dev, "no sensor reset pin available");
 		return -EINVAL;
 	} else {
-#ifdef AR0521_DEBUG
+#ifdef AR0234_DEBUG
 		printk("RESET = %x \n", reset_gpio);
 #endif
 	}
 
 	err = devm_gpio_request_one(dev, pwdn_gpio, GPIOF_OUT_INIT_HIGH,
-				    "ar0521_mipi_pwdn");
+				    "ar0234_mipi_pwdn");
 	if (err < 0) {
 		dev_warn(dev, "Failed to set power pin\n");
 		dev_warn(dev, "err = %d\n", err);
@@ -3364,40 +3371,30 @@ static int ar0521_parse_and_get_gpios(struct device *dev)
 	}
 
 	err = devm_gpio_request_one(dev, reset_gpio, GPIOF_OUT_INIT_HIGH,
-				    "ar0521_mipi_reset");
+				    "ar0234_mipi_reset");
 	if (err < 0) {
 		dev_warn(dev, "Failed to set reset pin\n");
 		dev_warn(dev, "err = %d\n", err);
 		return err;
 	}
 
-	dev_info(dev, "setting GPIOS!!");
-
-	gpio_set_value(pwdn_gpio, 0);
-	gpio_set_value(reset_gpio, 1);
-
-	int power_down_value = gpio_get_value(pwdn_gpio);
-	int reset_value = gpio_get_value(reset_gpio);
-
-	dev_info(dev, "current value of power down: %d", power_down_value);
-	dev_info(dev, "current value of reset: %d", reset_value);
-
 	return 0;
 }
 
 /*!
- * ar0521 I2C probe function
+ * ar0234 I2C probe function
  *
  * @param adapter            struct i2c_adapter *
  * @return  Error code indicating success or failure
  */
-static int ar0521_probe(struct i2c_client *client,
+static int ar0234_probe(struct i2c_client *client,
 			const struct i2c_device_id *id)
 {
 	struct pinctrl *pinctrl;
 	struct device_node *node = client->dev.of_node;
 	struct device *dev = &client->dev;
 
+	int retry = 5;
 	int ret, frm_fmt_size = 0, i;
 	uint16_t sensor_id = 0;
 
@@ -3409,68 +3406,63 @@ static int ar0521_probe(struct i2c_client *client,
 		dev_warn(dev, "no pin available\n");
 
 	/* Set initial values for the sensor struct. */
-	memset(&ar0521_data, 0, sizeof(ar0521_data));
+	memset(&ar0234_data, 0, sizeof(ar0234_data));
 
-	ret = ar0521_parse_and_get_gpios(dev);
+	ret = ar0234_parse_and_get_gpios(dev);
 	if (ret) {
-		dev_info(dev, "Warning: couldn't get GPIOs\n");
+		pr_info("Warning: couldn't get GPIOs\n");
 	}
 
-	ret = ar0521_parse_and_get_clocks(dev);
+	ret = ar0234_parse_and_get_clocks(dev);
 	if (ret) {
 		dev_err(dev, "Error occurred when getting clock\n");
 		return ret;
 	}
 
-	clk_prepare_enable(ar0521_data.sensor_clk);
+	clk_prepare_enable(ar0234_data.sensor_clk);
 
 	/*
 	 * We usually get and set/enable regulators here. But it doesn't
 	 * seem to be needed here as the Variscite EVK seems to be supplying
 	 * the required voltage directly without us needing to set it.
 	 */
+	toggle_gpio(reset_gpio, 1);
+	msleep(500);
 
-	int retval;
-	struct gpio_desc *csenable;
-
-	csenable = devm_gpiod_get_optional(dev, "csenable", GPIOD_OUT_HIGH);
-	if (IS_ERR(csenable)) {
-		retval = PTR_ERR(csenable);
-		dev_err(dev, "%s(): CANT FIND GPIO!\n", __func__);
-	} else {
-		dev_err(dev, "%s(): CSEnable pin OK!\n", __func__);
-	}
-
-	if (csenable) {
-		dev_err(dev, "%s(): CSEnable high!\n", __func__);
-		gpiod_set_value(csenable, 1);
-	} else {
-		dev_err(dev, "%s(): ERROR CSEnable!\n", __func__);
-	}
-
-	dev_info(dev, "Waiting for csi enable to stabilize!\n");
-
-	msleep(2000);
-
-	dev_info(dev, "Proceeding!!\n");
-
-	if (gpios_available()) {
-		toggle_gpio(reset_gpio, 1);
-		msleep(500);
-	}
-
-	ret = ar0521_verify_mcu(client);
+	ret = ar0234_verify_mcu(client);
 	if (ret) {
 		dev_err(dev, "Error occurred when verifying MCU\n");
 		return ret;
 	}
 
-	ar0521_data.mipi_lane_config = 4;
+	ar0234_data.mipi_lane_config = 4;
 	ret = mcu_isp_configuration(CMD_ID_LANE_CONFIG, client);
 	if (ret) {
 		dev_err(dev, "Error occurred in configuring mipi lanes\n");
 		return ret;
 	}
+
+/************* configuring mipiclock at 896 MHz ************/
+#if 1
+
+	ret = of_property_read_u32(node, "camera-mipi-clk",
+				   (u32 *)&(ar0234_data.mipi_clk_config));
+	printk("%s...clk:%d", __func__, ar0234_data.mipi_clk_config);
+	if (ret) {
+		dev_err(&client->dev,
+			"camera mipi clk is missing or invalid\n");
+		return ret;
+	} else
+		pr_info("camera-mipi-clk = %dMHz\n",
+			ar0234_data.mipi_clk_config);
+
+	//ar0234_data.mipi_clk_config = 896;
+	ret = mcu_isp_configuration(CMD_ID_MIPI_CLK_CONFIG, client);
+	if (ret) {
+		dev_err(dev, "Error occurred in configuring mipi clk\n");
+		return ret;
+	}
+#endif
 
 	/*
 	 * Query the number of controls from MCU
@@ -3506,7 +3498,16 @@ static int ar0521_probe(struct i2c_client *client,
 		return -EFAULT;
 	}
 
-	if (mcu_isp_init(client) < 0) {
+	retry = 5;
+	while (--retry >= 0) {
+		if (mcu_isp_init(client) < 0) {
+			dev_err(dev, "INIT ISP failure. retrying\n");
+			continue;
+		} else {
+			break;
+		}
+	}
+	if (retry < 0) {
 		dev_err(dev, "Unable to INIT ISP \n");
 		return -EFAULT;
 	}
@@ -3522,35 +3523,35 @@ static int ar0521_probe(struct i2c_client *client,
 	/*
 	 * Fill some state information as required.
 	 */
-	ar0521_data.i2c_client = client;
+	ar0234_data.i2c_client = client;
 
-	ar0521_data.pix.pixelformat = V4L2_PIX_FMT_UYVY;
-	ar0521_data.fmt.code = AR0521_DEFAULT_DATAFMT;
-	ar0521_data.fmt.colorspace = AR0521_DEFAULT_COLORSPACE;
-	ar0521_data.pix.width = AR0521_DEFAULT_WIDTH;
-	ar0521_data.pix.height = AR0521_DEFAULT_HEIGHT;
-	ar0521_data.streamcap.capability =
+	ar0234_data.pix.pixelformat = V4L2_PIX_FMT_UYVY;
+	ar0234_data.fmt.code = AR0234_DEFAULT_DATAFMT;
+	ar0234_data.fmt.colorspace = AR0234_DEFAULT_COLORSPACE;
+	ar0234_data.pix.width = AR0234_DEFAULT_WIDTH;
+	ar0234_data.pix.height = AR0234_DEFAULT_HEIGHT;
+	ar0234_data.streamcap.capability =
 		V4L2_MODE_HIGHQUALITY | V4L2_CAP_TIMEPERFRAME;
-	ar0521_data.streamcap.capturemode = AR0521_DEFAULT_MODE;
-	ar0521_data.num_frm_fmts = frm_fmt_size;
-	ar0521_data.power_on = 0;
+	ar0234_data.streamcap.capturemode = AR0234_DEFAULT_MODE;
+	ar0234_data.num_frm_fmts = frm_fmt_size;
+	ar0234_data.power_on = 0;
 
 	/*
 	 * Configure the stream with default configuration
 	 */
-	ret = ar0521_init(client);
+	ret = ar0234_init(client);
 	if (ret) {
 		dev_err(dev,
 			"Failed to initialise the device with default configuration\n");
 		return ret;
 	}
 
-	v4l2_i2c_subdev_init(&ar0521_data.subdev, client, &ar0521_subdev_ops);
+	v4l2_i2c_subdev_init(&ar0234_data.subdev, client, &ar0234_subdev_ops);
 
 	/*
 	 * Initialize Controls by getting details about the controls from the MCU
 	 */
-	ret = ar0521_ctrls_init(mcu_ctrl_info);
+	ret = ar0234_ctrls_init(mcu_ctrl_info);
 	if (ret) {
 		dev_warn(
 			dev,
@@ -3578,7 +3579,7 @@ static int ar0521_probe(struct i2c_client *client,
 				continue;
 			}
 
-			ret = ar0521_s_ctrl(&ar0521_data.subdev, &ctrl);
+			ret = ar0234_s_ctrl(&ar0234_data.subdev, &ctrl);
 			if (ret < 0) {
 				dev_err(dev,
 					"Failed to write default value for a control: %d; Control ID: %x\n",
@@ -3587,41 +3588,41 @@ static int ar0521_probe(struct i2c_client *client,
 		}
 	}
 
-	ar0521_data.subdev.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
-	ar0521_data.subdev.entity.function = MEDIA_ENT_F_CAM_SENSOR;
-	ar0521_data.pads[0].flags = MEDIA_PAD_FL_SOURCE;
+	ar0234_data.subdev.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+	ar0234_data.subdev.entity.function = MEDIA_ENT_F_CAM_SENSOR;
+	ar0234_data.pads[0].flags = MEDIA_PAD_FL_SOURCE;
 
-	ret = media_entity_pads_init(&ar0521_data.subdev.entity, 1,
-				     ar0521_data.pads);
-	ar0521_data.subdev.entity.ops = &ar0521_sd_media_ops;
+	ret = media_entity_pads_init(&ar0234_data.subdev.entity, 1,
+				     ar0234_data.pads);
+	ar0234_data.subdev.entity.ops = &ar0234_sd_media_ops;
 	if (ret < 0) {
 		dev_err(dev, "Failed to init media entity pads\n");
 		return ret;
 	}
 
-	ret = v4l2_async_register_subdev(&ar0521_data.subdev);
+	ret = v4l2_async_register_subdev(&ar0234_data.subdev);
 	if (ret) {
 		dev_err(dev,
 			"Failed to register the I2C subdev for the sensor\n");
 		return ret;
 	}
 
-	dev_info(dev, "AR0521 detected.\n");
+	pr_info("AR0234 detected.\n");
 
 	return 0;
 }
 
 /*!
- * ar0521 I2C detach function
+ * ar0234 I2C detach function
  *
  * @param client            struct i2c_client *
  * @return  Error code indicating success or failure
  */
-static int ar0521_remove(struct i2c_client *client)
+static int ar0234_remove(struct i2c_client *client)
 {
-	v4l2_async_unregister_subdev(&ar0521_data.subdev);
+	v4l2_async_unregister_subdev(&ar0234_data.subdev);
 
-	clk_disable_unprepare(ar0521_data.sensor_clk);
+	clk_disable_unprepare(ar0234_data.sensor_clk);
 
 	/*
 	 * Power down the MCU
@@ -3642,20 +3643,20 @@ static int ar0521_remove(struct i2c_client *client)
 	return 0;
 }
 
-static const struct i2c_device_id ar0521_id[] = { { "ar0521", 0 }, {} };
+static const struct i2c_device_id ar0234_id[] = { { "ar0234", 0 }, {} };
 
-MODULE_DEVICE_TABLE(i2c, ar0521_id);
+MODULE_DEVICE_TABLE(i2c, ar0234_id);
 
-static struct i2c_driver ar0521_i2c_driver = {
-	.driver = { .name = "ar0521", .owner = THIS_MODULE },
-	.probe = ar0521_probe,
-	.remove = ar0521_remove,
-	.id_table = ar0521_id,
+static struct i2c_driver ar0234_i2c_driver = {
+	.driver = { .name = "ar0234", .owner = THIS_MODULE },
+	.probe = ar0234_probe,
+	.remove = ar0234_remove,
+	.id_table = ar0234_id,
 };
 
-module_i2c_driver(ar0521_i2c_driver);
+module_i2c_driver(ar0234_i2c_driver);
 
-MODULE_DESCRIPTION("AR0521 V4L2 driver");
+MODULE_DESCRIPTION("AR0234 V4L2 driver");
 MODULE_AUTHOR("e-con Systems");
 MODULE_LICENSE("GPL v2");
 MODULE_VERSION("1.0");

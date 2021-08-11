@@ -3,3 +3,5 @@ mxc-jpeg-encdec-objs := mxc-jpeg-hw.o mxc-jpeg.o
 obj-$(CONFIG_IMX8_JPEG) += mxc-jpeg-encdec.o
 obj-$(CONFIG_MXC_CAMERA_AR0521)   += ar0521.o
 obj-$(CONFIG_MXC_CAMERA_AR1335)   += ar1335.o
+obj-$(CONFIG_MXC_CAMERA_AR0234)   += ar0234.o
+obj-$(CONFIG_MXC_CAMERA_AR1335_AF)   += ar1335_af.o
