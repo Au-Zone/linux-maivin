@@ -41,8 +41,7 @@ static int pwdn_gpio, reset_gpio;
 
 int gpios_available(void)
 {
-	//return (pwdn_gpio >= 0) && (reset_gpio >= 0);
-	return true;
+	return (pwdn_gpio >= 0) && (reset_gpio >= 0);
 }
 
 /**********************************************************************
