@@ -1821,7 +1821,7 @@ static int mcu_isp_configuration(uint8_t cmd_id, struct i2c_client *client)
 	case CMD_ID_LANE_CONFIG:
 		/*Lane configuration */
 		payload_data = ar0521_data.mipi_lane_config == 4 ? NUM_LANES_4 :
-								   NUM_LANES_2;
+									 NUM_LANES_2;
 		mc_data[2] = payload_data >> 8;
 		mc_data[3] = payload_data & 0xFF;
 		break;
@@ -3046,9 +3046,7 @@ static int ar0521_ctrls_init(ISP_CTRL_INFO *mcu_cam_ctrls)
 
 static int ar0521_verify_mcu(struct i2c_client *client)
 {
-	int ret = 0,
-	try
-		= 0;
+	int ret = 0, try = 0;
 	unsigned char fw_version[32] = { 0 };
 
 	if (client == NULL) {
@@ -3074,7 +3072,7 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 		int power_down_value = gpio_get_value(pwdn_gpio);
 		int reset_value = gpio_get_value(reset_gpio);
 
-		for (try = 0; try < 10; try ++) {
+		for (try = 0; try < 10; try++) {
 			ret = mcu_get_fw_version(client, fw_version);
 			if (ret < 0) {
 				msleep(100);
@@ -3429,35 +3427,8 @@ static int ar0521_probe(struct i2c_client *client,
 	 * seem to be needed here as the Variscite EVK seems to be supplying
 	 * the required voltage directly without us needing to set it.
 	 */
-
-	int retval;
-	struct gpio_desc *csenable;
-
-	csenable = devm_gpiod_get_optional(dev, "csenable", GPIOD_OUT_HIGH);
-	if (IS_ERR(csenable)) {
-		retval = PTR_ERR(csenable);
-		dev_err(dev, "%s(): CANT FIND GPIO!\n", __func__);
-	} else {
-		dev_err(dev, "%s(): CSEnable pin OK!\n", __func__);
-	}
-
-	if (csenable) {
-		dev_err(dev, "%s(): CSEnable high!\n", __func__);
-		gpiod_set_value(csenable, 1);
-	} else {
-		dev_err(dev, "%s(): ERROR CSEnable!\n", __func__);
-	}
-
-	dev_info(dev, "Waiting for csi enable to stabilize!\n");
-
-	msleep(2000);
-
-	dev_info(dev, "Proceeding!!\n");
-
-	if (gpios_available()) {
-		toggle_gpio(reset_gpio, 1);
-		msleep(500);
-	}
+	toggle_gpio(reset_gpio, 1);
+	msleep(500);
 
 	ret = ar0521_verify_mcu(client);
 	if (ret) {
