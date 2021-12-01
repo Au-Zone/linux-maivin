@@ -23,7 +23,6 @@
 #include <linux/pinctrl/consumer.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
-#include <linux/regulator/consumer.h>
 #include "ar0521.h"
 #include "mcu_firmware.h"
 
