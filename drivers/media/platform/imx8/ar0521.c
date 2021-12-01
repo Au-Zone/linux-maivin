@@ -23,6 +23,7 @@
 #include <linux/pinctrl/consumer.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
+
 #include "ar0521.h"
 #include "mcu_firmware.h"
 
@@ -35,7 +36,6 @@
  */
 static struct ar0521 ar0521_data;
 
-//static int pwdn_gpio, reset_gpio, csi_enable;
 static int pwdn_gpio, reset_gpio;
 
 int gpios_available(void)
@@ -358,8 +358,7 @@ static int mcu_bload_get_version(struct i2c_client *client)
 
 	ret = ar0521_write(client, g_bload_buf, 2);
 	if (ret < 0) {
-		dev_err(&client->dev,
-			"Write Failed trying to get bl version!! \n");
+		dev_err(&client->dev, "Write Failed \n");
 		return -1;
 	}
 
@@ -3067,9 +3066,6 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 		toggle_gpio(reset_gpio, 1);
 		msleep(500);
 
-		int power_down_value = gpio_get_value(pwdn_gpio);
-		int reset_value = gpio_get_value(reset_gpio);
-
 		for (try = 0; try < 10; try++) {
 			ret = mcu_get_fw_version(client, fw_version);
 			if (ret < 0) {
@@ -3181,16 +3177,6 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 			"Hint: Connected only one camera? Is someone else using the "
 			"power down/reset GPIOs?\n";
 
-		int power_down_value = gpio_get_value(pwdn_gpio);
-		int reset_value = gpio_get_value(reset_gpio);
-
-		dev_info(&client->dev, "NO GPIOS AVAILABLE, VALUES:");
-
-		dev_info(&client->dev, "current value of power down: %d",
-			 power_down_value);
-		dev_info(&client->dev, "current value of reset: %d",
-			 reset_value);
-
 		/*
 		 * When we do not have the reset GPIO, we cannot toggle it
 		 * to make the MCU switch to firmware mode. So, we try getting
@@ -3208,7 +3194,6 @@ static int ar0521_verify_mcu(struct i2c_client *client)
 		 *
 		 * So, we try to get the version of the bootloader.
 		 */
-
 		for (loop = 0; loop < 10; loop++) {
 			ret = mcu_bload_get_version(client);
 			if (ret < 0) {
@@ -3398,7 +3383,7 @@ static int ar0521_probe(struct i2c_client *client,
 
 	ret = ar0521_parse_and_get_gpios(dev);
 	if (ret) {
-		dev_info(dev, "Warning: couldn't get GPIOs\n");
+		pr_info("Warning: couldn't get GPIOs\n");
 	}
 
 	ret = ar0521_parse_and_get_clocks(dev);
@@ -3564,7 +3549,7 @@ static int ar0521_probe(struct i2c_client *client,
 		return ret;
 	}
 
-	dev_info(dev, "AR0521 detected.\n");
+	pr_info("AR0521 detected.\n");
 
 	return 0;
 }
