@@ -21,6 +21,7 @@
 #include <linux/i2c.h>
 #include <linux/of_gpio.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/regulator/consumer.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
 
@@ -40,7 +41,7 @@ static int pwdn_gpio, reset_gpio;
 
 int gpios_available(void)
 {
-	return (pwdn_gpio >= 0) && (reset_gpio >= 0);
+	return 1;
 }
 
 /**********************************************************************
@@ -3352,6 +3353,17 @@ static int ar0521_parse_and_get_gpios(struct device *dev)
 		return err;
 	}
 
+	dev_info(dev, "setting GPIOS!!");
+
+	gpio_set_value(pwdn_gpio, 0);
+	gpio_set_value(reset_gpio, 1);
+
+	int power_down_value = gpio_get_value(pwdn_gpio);
+	int reset_value = gpio_get_value(reset_gpio);
+
+	dev_info(dev, "current value of power down: %d", power_down_value);
+	dev_info(dev, "current value of reset: %d", reset_value);
+
 	return 0;
 }
 
@@ -3401,6 +3413,14 @@ static int ar0521_probe(struct i2c_client *client,
 	 */
 	toggle_gpio(reset_gpio, 1);
 	msleep(500);
+
+	ar0521_data.vref = devm_regulator_get(dev, "vref");
+	if (IS_ERR(ar0521_data.vref))
+		return PTR_ERR(ar0521_data.vref);
+
+	ret = regulator_enable(ar0521_data.vref);
+	if (ret < 0)
+		return ret;
 
 	ret = ar0521_verify_mcu(client);
 	if (ret) {

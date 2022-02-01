@@ -244,6 +244,8 @@ struct ar0521 {
 	uint16_t mipi_lane_config;
 	uint16_t mipi_clk_config;
 
+	struct regulator *vref;
+
 	struct v4l2_ctrl *ctrls[];
 	
 };

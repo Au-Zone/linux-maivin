@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+ OR MIT
 /*
- * Copyright 2020 Toradex
+ * Copyright 2021 Au-Zone
  */
 
 /dts-v1/;
@@ -10,14 +10,175 @@
 #include "imx8mp-verdin-dev.dtsi"
 
 / {
-	model = "Toradex Verdin iMX8M Plus WB on Verdin Development Board";
-	compatible = "toradex,verdin-imx8mp-wifi-dev",
-		     "toradex,verdin-imx8mp-wifi",
+	model = "Au-Zone Maivin board";
+	compatible = "toradex,verdin-imx8mp-nonwifi",
 		     "toradex,verdin-imx8mp",
 		     "fsl,imx8mp";
+
+	csi_3v3: regulator-csi-3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "CSI_3V3";
+		pinctrl-0 = <&pinctrl_csi_3v3>;
+		gpio = <&gpio3 7 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		startup-delay-us = <50000>;	/* TODO: Determine the right value */
+	};
+
+	m2_3v3: regulator-m2-3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "M2_3V3";
+		regulator-max-microvolt = <3300000>;
+		regulator-min-microvolt = <3300000>;
+		pinctrl-0 = <&pinctrl_m2_3v3>;
+		gpio = <&gpio3 1 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	/* Carrier Board Supply 3V3_SW */
+	reg_3v3: regulator-3v3-sw {
+		compatible = "regulator-fixed";
+		regulator-max-microvolt = <3300000>;
+		regulator-min-microvolt = <3300000>;
+		regulator-name = "3V3_SW";
+	};
+};
+
+&eqos {
+	status = "okay";
+};
+
+/* Disable IEEE power saving */
+&ethphy0 {
+	eee-broken-100tx;
+	eee-broken-1000t;
+};
+
+/* Verdin CAN_1 */
+&flexcan1 {
+	status = "okay";
+};
+
+/* Verdin CAN_2 */
+&flexcan2 {
+	status = "okay";
+};
+
+/* Verdin I2C_2_DSI */
+&i2c2 {
+	status = "okay";
+
+	clock-frequency = <400000>;
+	scl-gpios = <&gpio5 16 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	sda-gpios = <&gpio5 17 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+
+	// dac@d {
+	// 	compatible = "ti,dac081c081", "ti,dac5571";
+	// 	reg = <0x0d>;
+	// 	vref-supply = <&csi_3v3>;
+	// };
+};
+
+/* Verdin I2C_4_CSI */
+&i2c3 {
+	status = "okay";
+
+	// dac@d {
+	// 	compatible = "ti,dac081c081", "ti,dac5571";
+	// 	reg = <0x0d>;
+	// 	vref-supply = <&csi_3v3>;
+	// };
+};
+
+/* Verdin I2C_1 */
+&i2c4 {
+	status = "okay";
+
+	/* To be compatible with old versions of the board */
+	temp-sensor@4a {
+		compatible = "ti,tmp102","tmp102";
+		reg = <0x4a>;
+	};
+
+	temp-sensor@4b {
+		compatible = "ti,tmp102", "tmp102";
+		reg = <0x4b>;
+	};
+
+	/* EEPROM on the rear connector interface */
+	eeprom@54 {
+		compatible = "st,24c02";
+		pagesize = <16>;
+		reg = <0x54>;
+		// read-only = <1>;
+	};
+};
+
+/* EEPROM on the carrier board */
+&eeprom_carrier_board {
+	status = "okay";
+	read-only;
 };
 
 &iomuxc {
+	pinctrl-0 = <&pinctrl_gpio1>, <&pinctrl_gpio2>,
+		    <&pinctrl_gpio3>, <&pinctrl_gpio4>,
+		    <&pinctrl_gpio_hog1>, <&pinctrl_gpio_hog2>, <&pinctrl_gpio_hog3>,
+		    <&pinctrl_hdmi_hog>, <&pinctrl_pmic_tpm_ena>;
+
+	pinctrl_flexspi0: flexspi0grp {
+		fsl,pins = <
+			MX8MP_IOMUXC_NAND_READY_B__GPIO3_IO16		0x1C4	/* SODIMM 64 */
+			/*
+			 * Setting bit 8(Pull up select field) high to enable pull
+			 * Setting bit 7(Input select field) high to use Schmitt
+			 * Setting bit 2(Drive strength field) high
+			 * Setting bit 6(Pull Up/Down config field) high
+			 * This needs to be a pull up since when the SW1 switch is pressed it is
+			 * shorting this pin to ground
+			 */
+
+			MX8MP_IOMUXC_NAND_DATA00__FLEXSPI_A_DATA00	0x82	/* SODIMM 56 */
+			MX8MP_IOMUXC_NAND_DATA03__FLEXSPI_A_DATA03	0x82	/* SODIMM 62 */
+		>;
+	};
+
+	/* Used to enable DAC U5 output */
+	pinctrl_pwm_1: pwm1grp {
+		fsl,pins = <
+			MX8MP_IOMUXC_SPDIF_EXT_CLK__GPIO5_IO05		0x184	/* SODIMM 15 */
+		>;
+	};
+
+	/* Used to enable DAC U6 output */
+	pinctrl_pwm_2: pwm2grp {
+		fsl,pins = <
+			MX8MP_IOMUXC_GPIO1_IO11__GPIO1_IO11		0x184	/* SODIMM 16 */
+		>;
+	};
+
+	led_control: led {
+		fsl,pins = <
+			MX8MP_IOMUXC_NAND_DQS__GPIO3_IO14		0x82	/* SODIMM 66 */
+		>;
+	};
+
+	led_wdi_control: led_wdi {
+		fsl,pins = <
+			MX8MP_IOMUXC_NAND_DATA02__GPIO3_IO08		0x82	/* SODIMM 60 */
+		>;
+	};
+
+	Watchdog_control: WDI {
+		fsl,pins = <
+			MX8MP_IOMUXC_NAND_ALE__GPIO3_IO00		0x82	/* SODIMM 52 */
+		>;
+	};
+
+	pinctrl_m2_3v3: m2-3v3-grp {
+		fsl,pins = <
+			MX8MP_IOMUXC_NAND_CE0_B__GPIO3_IO01		0x82	/* SODIMM 54 */
+		>;
+	};
 
 	pinctrl_csi_3v3: csi-3v3-grp {
 		fsl,pins = <
@@ -25,23 +186,83 @@
 		>;
 	};
 
-	pinctrl_flexspi0: flexspi0grp {
+	pinctrl_trigger: trigger {
 		fsl,pins = <
-			MX8MP_IOMUXC_NAND_ALE__FLEXSPI_A_SCLK		0x1c2	/* SODIMM 52 */
-			MX8MP_IOMUXC_NAND_CE0_B__FLEXSPI_A_SS0_B	0x82	/* SODIMM 54 */
-			MX8MP_IOMUXC_NAND_READY_B__GPIO3_IO16		0x82	/* SODIMM 64 */
-			MX8MP_IOMUXC_NAND_DQS__FLEXSPI_A_DQS		0x82	/* SODIMM 66 */
-			MX8MP_IOMUXC_NAND_DATA00__FLEXSPI_A_DATA00	0x82	/* SODIMM 56 */
-			MX8MP_IOMUXC_NAND_DATA02__FLEXSPI_A_DATA02	0x82	/* SODIMM 60 */
-			MX8MP_IOMUXC_NAND_DATA03__FLEXSPI_A_DATA03	0x82	/* SODIMM 62 */
+			MX8MP_IOMUXC_SAI1_RXD1__GPIO4_IO03		0x184	/* SODIMM 220 */
+		>;
+	};
+
+	pinctrl_trigger_2: trigger_2 {
+		fsl,pins = <
+			MX8MP_IOMUXC_SAI1_RXC__GPIO4_IO01		0x184	/* SODIMM 222 */
 		>;
 	};
 };
 
-// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
-/*
-* Copyright 2020-2021 Toradex
-*/
+/* Verdin PCIE_1, for M.2 card slot */
+&pcie {
+	status = "okay";
+	epdev_on-supply = <&m2_3v3>;
+};
+
+&pcie_phy {
+	status = "okay";
+};
+
+&reg_usdhc2_vmmc {
+	vin-supply = <&reg_3v3>;
+};
+
+/* Verdin UART_1 */
+/* Enabling RS-485 operation */
+&uart1 {
+	fsl,uart-has-rtscts;
+	linux,rs485-enabled-at-boot-time;
+};
+
+/* Verdin UART_2, for M.2 card slot */
+&uart2 {
+	status = "okay";
+};
+
+/* Verdin UART_3, used as the Linux Console */
+&uart3 {
+	status = "okay";
+};
+
+/* Verdin USB_1, USB recovery */
+&usb3_phy0 {
+	status = "okay";
+};
+
+&usb3_0 {
+	status = "okay";
+};
+
+&usb_dwc3_0 {
+	status = "okay";
+};
+
+/* Verdin USB_2, for M.2 card slot */
+&usb3_phy1 {
+	status = "okay";
+};
+
+&usb3_1 {
+	status = "okay";
+};
+
+&usb_dwc3_1 {
+	status = "okay";
+};
+
+/* Verdin SD_1, for SD card slot */
+&usdhc2 {
+	status = "okay";
+};
+
+
+//////////////////Econ Sensor config part//////////////////////////////
 
 &cameradev {
 	status = "okay";
@@ -74,7 +295,7 @@
 		PVDD-supply = <&reg_3p3v>;
 		reg = <0x42>;
 		rst-gpios = <&gpio1 7 GPIO_ACTIVE_LOW>;
-		csenable-gpios = <&gpio3 7 GPIO_ACTIVE_HIGH>;
+		vref-supply = <&csi_3v3>;
 		status = "okay";
 
 		port {
@@ -115,4 +336,16 @@
 			remote-endpoint = <&ar0521_mipi_0_ep>;
 		};
 	};
+};
+
+&gpu_2d {
+	status = "okay";
+};
+
+&gpu_3d {
+	status = "okay";
+};
+
+&mix_gpu_ml {
+	status = "okay";
 };
